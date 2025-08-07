@@ -34,12 +34,13 @@ def spinorb_from_spatial(h1e: np.ndarray, h2e: np.ndarray) -> (np.ndarray, np.nd
     return h1e_spinorb, h2e_spinorb
 
 
-def h2e_convention(h2e: np.ndarray) -> str:
+def h2e_check_convention(h2e: np.ndarray) -> str:
     """
     Check whether ordering of two-electron integral tensor follows physicists' or chemists' convention
 
     :param h2e: two-electron integral tensor
-    :return: "chemist" or "physist" or RuntimeError if neither
+    :return: "chemist" or "physist"
+    :raises RuntimeError: if order is neither chemists' nor physicists'
     """
 
     if np.allclose(h2e, np.einsum("pqrs -> qprs", h2e)):
@@ -51,3 +52,22 @@ def h2e_convention(h2e: np.ndarray) -> str:
             if np.allclose(h2e, np.einsum("pqrs -> qpsr", h2e)):
                 return "physicist"
     raise RuntimeError("h2e does not have proper symmetry!")
+
+
+def h2e_order(h2e: np.ndarray, convention: str) -> np.ndarray:
+    """
+    Orders the two-electron integral tensor according to the given convention
+
+    :param h2e: two-electron integral tensor
+    :param convention: either 'chemist' or 'physicist'
+    :return: two-electron is specified order
+    """
+    curr_convention = h2e_check_convention(h2e)
+    if convention == curr_convention:
+        return h2e
+    elif convention == "physicist":
+        return np.asarray(h2e.transpose(0, 2, 3, 1), order="C")
+    elif convention == "chemist":
+        return np.asarray(h2e.transpose(0, 3, 1, 2), order="C")
+    else:
+        raise ValueError(f"{convention} is not a valid convention")
