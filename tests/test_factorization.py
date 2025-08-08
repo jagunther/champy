@@ -15,6 +15,7 @@ def test_lapack_dpstrf(n, m):
     L = cholesky_pivoted(A)
     assert np.allclose(A, L @ L.T)
 
+
 @pytest.mark.parametrize("integrals_h2o", [4], indirect=True)
 def test_h2e_cholesky(integrals_h2o):
     h2e = integrals_h2o[2]
