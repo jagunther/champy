@@ -1,4 +1,48 @@
 import numpy as np
+from openfermion import (
+    QubitOperator,
+    InteractionOperator,
+    get_fermion_operator,
+    jordan_wigner,
+    bravyi_kitaev,
+    symmetry_conserving_bravyi_kitaev,
+    parity_code,
+    binary_code_transform,
+)
+
+
+def integrals_to_QubitOperator(h0, h1e, h2e, mapping, nelec: int = None):
+    """
+
+    :param h0:
+    :param h1e:
+    :param h2e:
+    :param mapping:
+    :param nelec:
+    :return:
+    """
+    h1e_spinorb, h2e_spinorb = spinorb_from_spatial(h1e, h2e)
+    h2e_spinorb = h2e_order(h2e_spinorb, "physicist")
+    op = get_fermion_operator(InteractionOperator(h0, h1e_spinorb, 1 / 2 * h2e_spinorb))
+    num_spinorb = 2 * h1e.shape[0]
+    if mapping == "jw":
+        qubit_operator = jordan_wigner(op)
+    elif mapping == "bk":
+        qubit_operator = bravyi_kitaev(op)
+    elif mapping == "symm-bk":
+        if num_spinorb <= 4:
+            pass
+            # raise ValueError("Symm-BK on 2 spatial orbitals gives wrong eigenvalues!")
+            # TODO: Fix this
+        if nelec < 0:
+            raise ValueError("number of electrons must be positive integer!")
+        qubit_operator = symmetry_conserving_bravyi_kitaev(op, num_spinorb, nelec)
+    elif mapping == "parity":
+        code = parity_code(num_spinorb)
+        qubit_operator = binary_code_transform(op, code)
+    else:
+        raise ValueError(f"Mapping {mapping} not supported")
+    return qubit_operator
 
 
 def spinorb_from_spatial(h1e: np.ndarray, h2e: np.ndarray) -> (np.ndarray, np.ndarray):
