@@ -99,3 +99,11 @@ def test_mul(hamil_random, scalar):
     else:
         hamil = scalar * hamil
         assert abs(hamil.max_energy() + e * scalar) < 1e-10
+
+
+@pytest.mark.parametrize("integrals_h2o", [4], indirect=True)
+def test_fcidump(integrals_h2o):
+    h0, h1e, h2e = integrals_h2o
+    hamil = ElectronicStructure(h0=h0, h1e=h1e, h2e=h2e, num_elec=4)
+    hamil.to_fcidump("FCIDUMP_test")
+    hamil_ = ElectronicStructure.from_fcidump("FCIDUMP_test")

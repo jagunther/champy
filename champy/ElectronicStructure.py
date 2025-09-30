@@ -1,5 +1,7 @@
 from champy.Hamiltonian import Hamiltonian
 from pyscf import fci
+from pyscf.tools import fcidump
+from pyscf.ao2mo import restore
 import numpy as np
 import scipy
 
@@ -108,3 +110,34 @@ class ElectronicStructure(Hamiltonian):
             max_cycle=200,
         )
         return fcivec[0].flatten()
+
+    @staticmethod
+    def from_fcidump(file: str):
+        """
+        Create an ElectronicStructure object from an FCIDUMP file
+        :param file: path to the FCIDUMP file
+        :return: ElectronicStructure object
+        """
+        data = fcidump.read(file)
+        h0 = data["ECORE"]
+        h1e = data["H1"]
+        h2e = data["H2"]
+        norb = data["NORB"]
+        nelec = data["NELEC"]
+        h2e = restore("s1", h2e, norb)
+        return ElectronicStructure(h0=h0, h1e=h1e, h2e=h2e, num_elec=nelec)
+
+    def to_fcidump(self, file: str):
+        """
+        Write the ElectronicStructure object to an FCIDUMP file
+
+        :param file: path to file
+        """
+        fcidump.from_integrals(
+            filename=file,
+            h1e=self.h1e,
+            h2e=self.h2e,
+            nmo=self.num_orb,
+            nelec=self.num_elec,
+            nuc=self.constant,
+        )
