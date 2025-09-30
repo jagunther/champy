@@ -20,6 +20,10 @@ class Hamiltonian(ABC):
         pass  # multiplication by scalar
 
     @abstractmethod
+    def __eq__(self, other):
+        pass
+
+    @abstractmethod
     def to_sparse_matrix(self) -> scipy.sparse.csr_matrix:
         pass
 

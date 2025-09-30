@@ -64,6 +64,14 @@ class ElectronicStructure(Hamiltonian):
 
     __rmul__ = __mul__
 
+    def __eq__(self, other):
+        if self._compatible(other):
+            if np.allclose(other.h0, self.h0):
+                if np.allclose(other.h1e, self.h1e):
+                    if np.allclose(other.h2e, self.h2e):
+                        return True
+        return False
+
     @property
     def constant(self) -> float:
         return self.h0
