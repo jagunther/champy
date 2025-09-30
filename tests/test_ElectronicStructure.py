@@ -102,11 +102,12 @@ def test_mul(hamil_random, scalar):
 
 
 @pytest.mark.parametrize("integrals_h2o", [4], indirect=True)
-def test_fcidump(integrals_h2o):
+def test_fcidump(integrals_h2o, tmpdir):
+    file = tmpdir / "FCIDUMP_test"
     h0, h1e, h2e = integrals_h2o
     hamil = ElectronicStructure(h0=h0, h1e=h1e, h2e=h2e, num_elec=4)
-    hamil.to_fcidump("FCIDUMP_test")
-    hamil_ = ElectronicStructure.from_fcidump("FCIDUMP_test")
+    hamil.to_fcidump(file)
+    assert hamil == ElectronicStructure.from_fcidump(file)
 
 
 @pytest.mark.parametrize(
