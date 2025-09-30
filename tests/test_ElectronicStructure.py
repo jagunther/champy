@@ -99,3 +99,29 @@ def test_mul(hamil_random, scalar):
     else:
         hamil = scalar * hamil
         assert abs(hamil.max_energy() + e * scalar) < 1e-10
+
+
+@pytest.mark.parametrize(
+    "hamil_random_pair",
+    [
+        {"num_orb1": 4, "num_orb2": 4, "num_elec1": 4, "num_elec2": 4},
+        {"num_orb1": 6, "num_orb2": 6, "num_elec1": 6, "num_elec2": 6},
+    ],
+    indirect=True,
+)
+def test_eq(hamil_random_pair):
+    hamil1, hamil2 = hamil_random_pair
+    assert hamil1 == hamil2
+
+
+@pytest.mark.parametrize(
+    "hamil_random_pair",
+    [
+        {"num_orb1": 4, "num_orb2": 5, "num_elec1": 4, "num_elec2": 4},
+        {"num_orb1": 6, "num_orb2": 5, "num_elec1": 6, "num_elec2": 6},
+    ],
+    indirect=True,
+)
+def test_neq(hamil_random_pair):
+    hamil1, hamil2 = hamil_random_pair
+    assert hamil1 != hamil2
