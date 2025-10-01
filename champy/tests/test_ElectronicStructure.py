@@ -70,11 +70,9 @@ def test_add(hamil_random_pair):
 )
 def test_sub(hamil_random_pair):
     hamil1, hamil2 = hamil_random_pair
-    print(hamil1.h1e, hamil2.h1e)
     hamil_sub = hamil1 - hamil2
     assert hamil1.num_orb == hamil_sub.num_orb
     assert hamil1.num_elec == hamil_sub.num_elec
-
     assert abs(hamil_sub.ground_state_energy()) < 1e-10
 
 
@@ -142,3 +140,10 @@ def test_eq(hamil_random_pair):
 def test_neq(hamil_random_pair):
     hamil1, hamil2 = hamil_random_pair
     assert hamil1 != hamil2
+
+
+def test_sum_pauli_coeffs(rhf_h2o):
+    rhf = rhf_h2o
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
+    ref_value = 717  # from Koridon 2021 PRR
+    assert abs(hamil.sum_pauli_coeffs() - ref_value) < 0.1

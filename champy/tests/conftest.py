@@ -7,12 +7,13 @@ from champy.ElectronicStructure import ElectronicStructure
 
 
 def _rhf_h2o():
+    # geometry from literature, Koridon '21 PRR
     xyz_H2O = """
-    O          0.00000        0.00000        0.11779
-    H          0.00000        0.75545       -0.47116
-    H          0.00000       -0.75545       -0.47116
+    O 0. 0. 0.
+    H 0.757 0.586 0.
+    H -.757 0.586 0.
     """
-    mol = gto.M(atom=xyz_H2O, basis="sto3g")
+    mol = gto.M(atom=xyz_H2O, basis="ccpvdz")
     hf = scf.RHF(mol).newton()
     hf.run()
     return hf
