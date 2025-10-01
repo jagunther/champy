@@ -4,6 +4,7 @@ from pyscf.tools import fcidump
 from pyscf.ao2mo import restore
 import numpy as np
 import scipy
+from numba import jit
 
 
 class ElectronicStructure(Hamiltonian):
@@ -149,3 +150,102 @@ class ElectronicStructure(Hamiltonian):
             nelec=self.num_elec,
             nuc=self.constant,
         )
+
+    @jit(nopython=True)
+    def pauli_coeffs(self) -> (float, np.ndarray, np.ndarray):
+        """
+        Computes the coefficients of the Hamiltonian after Fermion-to-qubit mapping, i.e.
+        for resulting qubit Hamiltonian Σ_i h_i P_i, where P_i are Paulistrings, it returns
+        the coefficients h_i.
+
+        Returns tuple (coeff_constant, coeffs quadr terms, coeffs quart terms)
+
+        See equation F9 in https://quantum-journal.org/papers/q-2023-05-12-1000/
+        """
+        coeffs_quadr = []
+        coeffs_quart = []
+
+        coeff_const = self.h0
+        for p in range(self.num_orb):
+            coeff_const += self.h1e[p, p]
+            for r in range(self.num_orb):
+                coeff_const += 0.5 * self.h2e[p, p, r, r]
+                coeff_const -= 0.25 * self.h2e[p, r, r, p]
+
+        for p in range(self.num_orb):
+            for q in range(self.num_orb):
+                curr = self.h1e[p, q]
+                for r in range(self.num_orb):
+                    curr += self.h2e[p, q, r, r]
+                    curr -= 0.5 * self.h2e[p, r, r, q]
+                coeffs_quadr.append(1j / 2 * curr)
+                coeffs_quadr.append(1j / 2 * curr)
+
+        for r in range(self.num_orb - 1):
+            for p in range(r + 1, self.num_orb):
+                for q in range(self.num_orb - 1):
+                    for s in range(q + 1, self.num_orb):
+                        coeffs_quart.append(
+                            (self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 4
+                        )
+                        coeffs_quart.append(
+                            (self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 4
+                        )
+
+        for r in range(self.num_orb - 1):
+            for p in range(r + 1, self.num_orb):
+                for q in range(self.num_orb):
+                    for s in range(q, self.num_orb):
+                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
+                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
+
+        for r in range(self.num_orb):
+            for p in range(r, self.num_orb):
+                for q in range(1, self.num_orb):
+                    for s in range(q):
+                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
+                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
+
+        for p in range(self.num_orb):
+            for q in range(self.num_orb):
+                coeffs_quart.append(self.h2e[p, q, p, q] / 4)
+
+        return coeff_const, np.array(coeffs_quadr), np.array(coeffs_quart)
+
+    def sum_pauli_coeffs(self) -> float:
+        """
+        Compute the sum of absolute values of coefficients of Hamiltonian expressed in terms of Paulis
+        after fermion-to-qubit mapping.
+        """
+        res = 0
+        for p in range(self.num_orb):
+            for q in range(self.num_orb):
+                curr = self.h1e[p, q]
+                for r in range(self.num_orb):
+                    curr += self.h2e[p, q, r, r]
+                    curr -= 0.5 * self.h2e[p, r, r, q]
+                res += abs(curr)
+
+        for r in range(self.num_orb - 1):
+            for p in range(r + 1, self.num_orb):
+                for q in range(self.num_orb - 1):
+                    for s in range(q + 1, self.num_orb):
+                        res += abs(self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 2
+
+        for r in range(self.num_orb - 1):
+            for p in range(r + 1, self.num_orb):
+                for q in range(self.num_orb):
+                    for s in range(q, self.num_orb):
+                        res += abs(self.h2e[p, q, r, s] / 2)
+
+        for r in range(self.num_orb):
+            for p in range(r, self.num_orb):
+                for q in range(1, self.num_orb):
+                    for s in range(q):
+                        res += abs(self.h2e[p, q, r, s] / 2)
+
+        for p in range(self.num_orb):
+            for q in range(self.num_orb):
+                res += abs(self.h2e[p, q, p, q] / 4)
+
+        return res
