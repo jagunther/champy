@@ -110,6 +110,14 @@ def test_fcidump(integrals_h2o, tmpdir):
     assert hamil == ElectronicStructure.from_fcidump(file)
 
 
+@pytest.mark.parametrize("integrals_h2o", [4], indirect=True)
+def test_from_pyscf(integrals_h2o, rhf_h2o):
+    h0, h1e, h2e = integrals_h2o
+    rhf = rhf_h2o
+    hamil = ElectronicStructure.from_pyscf(rhf, 4, 4)
+    assert np.allclose(h0, hamil.constant)
+
+
 @pytest.mark.parametrize(
     "hamil_random_pair",
     [

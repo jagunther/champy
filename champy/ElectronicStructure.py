@@ -2,6 +2,7 @@ from champy.Hamiltonian import Hamiltonian
 from pyscf import fci
 from pyscf.tools import fcidump
 from pyscf.ao2mo import restore
+from pyscf.mcscf import CASCI
 import numpy as np
 import scipy
 
@@ -118,6 +119,21 @@ class ElectronicStructure(Hamiltonian):
             max_cycle=200,
         )
         return fcivec[0].flatten()
+
+    @staticmethod
+    def from_pyscf(rhf, num_orb, num_elec):
+        """
+        Create an ElectronicStructure object from a PySCF RHF object
+
+        :param rhf: converged PySCF RHF object
+        :param num_orb: int, number of active spatial orbitals
+        :param num_elec: int, number of active electrons
+        :return: ElectronicStructure object
+        """
+        casci = CASCI(rhf, num_orb, num_elec)
+        h1e, h0 = casci.get_h1eff()
+        h2e = restore("s1", casci.get_h2eff(), num_orb)
+        return ElectronicStructure(h0=h0, h1e=h1e, h2e=h2e, num_elec=num_elec)
 
     @staticmethod
     def from_fcidump(file: str):

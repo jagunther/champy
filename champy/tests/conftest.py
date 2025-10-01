@@ -6,7 +6,7 @@ import numpy as np
 from champy.ElectronicStructure import ElectronicStructure
 
 
-def _integrals_h2o(num_orb: int, num_elec: int):
+def _rhf_h2o():
     xyz_H2O = """
     O          0.00000        0.00000        0.11779
     H          0.00000        0.75545       -0.47116
@@ -15,6 +15,11 @@ def _integrals_h2o(num_orb: int, num_elec: int):
     mol = gto.M(atom=xyz_H2O, basis="sto3g")
     hf = scf.RHF(mol).newton()
     hf.run()
+    return hf
+
+
+def _integrals_h2o(num_orb: int, num_elec: int):
+    hf = _rhf_h2o()
     casci = CASCI(hf, num_orb, num_elec)
     h1e, h0 = casci.get_h1eff()
     h2e = restore("s1", casci.get_h2eff(), num_orb)
@@ -38,6 +43,11 @@ def _integrals_random(num_orb, order):
         h2e += np.einsum("pqrs -> prqs", h2e)
         h2e += np.einsum("pqrs -> qpsr", h2e)
     return 0, h1e, h2e
+
+
+@pytest.fixture(scope="session")
+def rhf_h2o(request):
+    return _rhf_h2o()
 
 
 @pytest.fixture(scope="session")
