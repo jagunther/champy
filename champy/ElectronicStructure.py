@@ -121,6 +121,59 @@ class ElectronicStructure(Hamiltonian):
         )
         return fcivec[0].flatten()
 
+    def fock_operator(self) -> np.ndarray:
+        """
+        Construct the Fock operator from the h1e and h2e
+
+        :return: fock operator, num_orb x num_orb np.array
+        """
+        assert self.num_elec % 2 == 0
+        num_occ = self.num_elec // 2
+        fock_op = self.h1e
+        fock_op += 2 * np.einsum("ijkk -> ij", self.h2e[:, :, :num_occ, :num_occ])
+        fock_op -= np.einsum("ikkj -> ij", self.h2e[:, :num_occ, :num_occ, :])
+        return fock_op
+
+    def hf_orbital_energies(self) -> np.ndarray:
+        """
+        If h1e and h2e are given in the canonical HF basis, returns the orbital energies.
+        """
+        if not self.is_canonical_hf_basis():
+            raise RuntimeError("h1e, h2e not in canonical HF basis")
+        return np.diag(self.fock_operator())
+
+    def is_canonical_hf_basis(self) -> bool:
+        """
+        Checks whether the underlying basis of h1e, h2e is the canonical HF basis, up to permutations
+        of the basis elements.
+        """
+
+        f = self.fock_operator()
+        np.fill_diagonal(f, 0)
+        if not np.all(np.abs(f) < 1e-6):
+            return False
+        return True
+
+    def hf_energy(self) -> float:
+        """
+        Compute the HF energy of the system. Checks first whether underlying orbitals are canonical
+        HF orbitals. Assumes that orbitals are ordered by orbital energy.
+
+        :return: HF energy
+        """
+        assert self.num_elec % 2 == 0
+        num_occ = self.num_elec // 2
+        if not self.is_canonical_hf_basis():
+            raise RuntimeError(f"Not in canonical orbital basis")
+        else:
+            e = self.constant
+            e += 2 * np.sum(np.diag(self.h1e)[:num_occ])
+            for i in range(num_occ):
+                for j in range(num_occ):
+                    e += 2 * self.h2e[i, i, j, j]
+                    e -= self.h2e[i, j, j, i]
+            return e
+
     @staticmethod
     def from_pyscf(rhf, num_orb, num_elec):
         """

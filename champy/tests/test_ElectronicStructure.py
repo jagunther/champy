@@ -147,3 +147,28 @@ def test_sum_pauli_coeffs(rhf_h2o):
     hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
     ref_value = 717  # from Koridon 2021 PRR
     assert abs(hamil.sum_pauli_coeffs() - ref_value) < 0.1
+
+
+def test_is_canonical_hf_basis(rhf_h2o):
+    rhf = rhf_h2o
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
+    assert hamil.is_canonical_hf_basis()
+
+
+def test_hf_energy(rhf_h2o):
+    rhf = rhf_h2o
+    e_ref = rhf.e_tot
+
+    # compute hf energy without frozen core
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=10, num_elec=10)
+    assert abs(e_ref - hamil.hf_energy()) < 1e-10
+
+    # compute hf energy from hamil with frozen core
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=4, num_elec=4)
+    assert abs(e_ref - hamil.hf_energy()) < 1e-10
+
+
+def test_hf_orbital_energies(rhf_h2o):
+    rhf = rhf_h2o
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
+    assert np.allclose(hamil.hf_orbital_energies(), rhf.mo_energy)
