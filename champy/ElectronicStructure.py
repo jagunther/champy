@@ -6,6 +6,7 @@ from pyscf.mcscf import CASCI
 import numpy as np
 import scipy
 from numba import jit
+import copy
 
 
 class ElectronicStructure(Hamiltonian):
@@ -129,7 +130,7 @@ class ElectronicStructure(Hamiltonian):
         """
         assert self.num_elec % 2 == 0
         num_occ = self.num_elec // 2
-        fock_op = self.h1e
+        fock_op = copy.deepcopy(self.h1e)
         fock_op += 2 * np.einsum("ijkk -> ij", self.h2e[:, :, :num_occ, :num_occ])
         fock_op -= np.einsum("ikkj -> ij", self.h2e[:, :num_occ, :num_occ, :])
         return fock_op
@@ -144,13 +145,14 @@ class ElectronicStructure(Hamiltonian):
 
     def is_canonical_hf_basis(self) -> bool:
         """
-        Checks whether the underlying basis of h1e, h2e is the canonical HF basis, up to permutations
-        of the basis elements.
+        Checks whether the underlying basis of h1e, h2e is the canonical HF basis
         """
-
         f = self.fock_operator()
         np.fill_diagonal(f, 0)
         if not np.all(np.abs(f) < 1e-6):
+            return False
+        if not np.allclose(np.diag(f), sorted(np.diag(f))):
+            print("The HF orbitals are not in the right order")
             return False
         return True
 
@@ -173,6 +175,26 @@ class ElectronicStructure(Hamiltonian):
                     e += 2 * self.h2e[i, i, j, j]
                     e -= self.h2e[i, j, j, i]
             return e
+
+    def hf_state(self) -> np.ndarray:
+        """
+        Computes the HF state of the system in the Fock basis (as groundstate)
+        """
+        # following https://github.com/pyscf/pyscf/issues/2154
+        if not self.is_canonical_hf_basis():
+            raise RuntimeError(f"Not in canonical orbital basis")
+        assert self.num_elec % 2 == 0
+        num_det_alpha = int(scipy.special.binom(self.num_orb, self.num_elec // 2))
+        num_det_beta = int(scipy.special.binom(self.num_orb, self.num_elec // 2))
+        hf_det = np.zeros((num_det_alpha, num_det_beta))
+        hf_det[0, 0] = 1
+        return hf_det.flatten()
+
+    def hf_overlap(self) -> float:
+        """
+        Computes overlap between the HF state and the ground state
+        """
+        return np.abs(self.hf_state().T @ self.ground_state()) ** 2
 
     @staticmethod
     def from_pyscf(rhf, num_orb, num_elec):
