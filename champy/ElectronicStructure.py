@@ -85,7 +85,7 @@ class ElectronicStructure(Hamiltonian):
 
     @property
     def dimension(self) -> int:
-        return (2 * self.num_orb) ** 2
+        return int(scipy.special.binom(self.num_orb, self.num_elec // 2) ** 2)
 
     def to_sparse_matrix(self) -> scipy.sparse.csr_matrix:
         """
