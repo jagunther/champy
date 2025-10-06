@@ -181,3 +181,11 @@ def test_hf_state(rhf_h2o):
     hf_expval = hf_state.T @ hamil.to_sparse_matrix() @ hf_state
     e_hf = hamil.hf_energy()
     assert abs(e_hf - (hf_expval + hamil.constant)) < 1e-7
+
+
+def test_onv_basis(rhf_h2o):
+    rhf = rhf_h2o
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=6, num_elec=6)
+    hf_state = hamil.hf_state()
+    idx_onv = np.where(hf_state == 1)[0][0]
+    assert hamil.onv_basis()[idx_onv] == "000111000111"

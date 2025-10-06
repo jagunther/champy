@@ -110,7 +110,7 @@ class ElectronicStructure(Hamiltonian):
         e, _ = cisolver.kernel(-self.h1e, -self.h2e, self.num_orb, self.num_elec)
         return e - self.constant
 
-    def ground_state(self) -> scipy.sparse.csr_matrix:
+    def ground_state(self) -> np.ndarray:
         _, fcivec = fci.direct_spin1.kernel(
             self.h1e,
             self.h2e,
@@ -121,6 +121,27 @@ class ElectronicStructure(Hamiltonian):
             max_cycle=200,
         )
         return fcivec[0].flatten()
+
+    def onv_basis(self) -> np.ndarray:
+        """
+        The occupation number vector basis w.r.t. which to_sparse_matrix(),
+        ground_state() and hf_state() are defined. Each element is a string
+        of length 2 * num_orb with 1s and 0s. The first num_orb bits represent
+        the spin-alpha spin-orbitals, ordered with increasing orbital index
+        from right to left. The second num_orb bits represent the spin-beta
+        spin-orbitals, ordered the same way.
+
+        Example: For 4 spatial orbitals (0,1,2,3) and 4 electrons the state with
+        doubly occupied orbitals 0 and 1 is '00110011'.
+        """
+        assert self.num_elec % 2 == 0
+        dets = [
+            str(bin(x))[2:].rjust(self.num_orb, "0")
+            for x in fci.cistring.make_strings(
+                list(range(self.num_orb)), self.num_elec // 2
+            )
+        ]
+        return np.array([[(d_a + d_b) for d_b in dets] for d_a in dets]).flatten()
 
     def fock_operator(self) -> np.ndarray:
         """
