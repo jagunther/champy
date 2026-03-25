@@ -19,7 +19,7 @@ dependencies = [
     "numba>=0.60.0",
     "scipy",
     "openfermion",
-    "qiskit"
+    "pauliarray",
 ]
 
 [project.urls]

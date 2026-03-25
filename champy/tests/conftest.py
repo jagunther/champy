@@ -4,6 +4,7 @@ from pyscf.mcscf import CASCI
 from pyscf.ao2mo import restore
 import numpy as np
 from champy.ElectronicStructure import ElectronicStructure
+from champy.PauliHamiltonian import PauliHamiltonian
 
 
 def _rhf_h2o():
@@ -44,6 +45,21 @@ def _integrals_random(num_orb, order):
         h2e += np.einsum("pqrs -> prqs", h2e)
         h2e += np.einsum("pqrs -> qpsr", h2e)
     return 0, h1e, h2e
+
+
+@pytest.fixture
+def random_pauli_hamiltonian(request):
+    num_qubits, num_terms = request.param
+    rng = np.random.default_rng(42)
+    identity = "I" * num_qubits
+    non_id_labels = []
+    while len(non_id_labels) < num_terms - 1:
+        label = "".join("IXYZ"[i] for i in rng.integers(0, 4, num_qubits))
+        if label != identity:
+            non_id_labels.append(label)
+    labels = [identity] + non_id_labels
+    weights = rng.standard_normal(num_terms)
+    return PauliHamiltonian.from_labels_and_weights(labels, weights), num_qubits, num_terms
 
 
 @pytest.fixture(scope="session")
