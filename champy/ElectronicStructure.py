@@ -41,7 +41,7 @@ class ElectronicStructure(Hamiltonian):
             )
         else:
             raise RuntimeError(
-                "ElectronicStructure objects must have same number of electrons when adding!"
+                "ElectronicStructure objects must have same numbers of orbitals and electrons!"
             )
 
     def __sub__(self, other):
@@ -54,7 +54,7 @@ class ElectronicStructure(Hamiltonian):
             )
         else:
             raise RuntimeError(
-                "ElectronicStructure objects must have same number of orbitals when adding!"
+                "ElectronicStructure objects must have same numbers of orbitals and electrons!"
             )
 
     def __mul__(self, other):
