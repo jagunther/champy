@@ -2,7 +2,7 @@ from champy.Hamiltonian import Hamiltonian
 import numpy as np
 
 
-class MajoranaHamiltonian(Hamiltonian):
+class MajoranaPair(Hamiltonian):
 
     def __init__(
         self,
@@ -17,13 +17,15 @@ class MajoranaHamiltonian(Hamiltonian):
         assert set(coeff2.shape) == set(coeff4.shape)
 
         self._constant = const
+        self.coeff2 = coeff2
+        self.coeff4 = coeff4
 
     def _compatible(self, other):
         assert self.num_qubits == other.num_qubits
 
     def __add__(self, other):
         if self._compatible(other):
-            return MajoranaHamiltonian(
+            return MajoranaPair(
                 const=self.constant + other.constant,
                 coeff2=self.coeff2 + other.coeff2,
                 coeff4=self.coeff4 + other.coeff4,
@@ -35,7 +37,7 @@ class MajoranaHamiltonian(Hamiltonian):
 
     def __sub__(self, other):
         if self._compatible(other):
-            return MajoranaHamiltonian(
+            return MajoranaPair(
                 const=self.constant - other.constant,
                 coeff2=self.coeff2 - other.coeff2,
                 coeff4=self.coeff4 - other.coeff4,
@@ -47,15 +49,13 @@ class MajoranaHamiltonian(Hamiltonian):
 
     def __mul__(self, other):
         if isinstance(other, (int, float)):
-            return MajoranaHamiltonian(
+            return MajoranaPair(
                 const=self.constant * other,
-                ind2=self.ind2,
-                ind4=self.ind4,
                 coeff2=self.coeff2 * other,
                 coeff4=self.coeff4 * other,
             )
         else:
-            raise TypeError(f"Cannot multiply MajoranaHamiltonian by {type(other)}!")
+            raise TypeError(f"Cannot multiply MajoranaPair by {type(other)}!")
 
     def __eq__(self, other):
         if self._compatible(other):
