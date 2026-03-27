@@ -1,4 +1,5 @@
 from champy.Hamiltonian import Hamiltonian
+from champy import MajoranaPair
 from pyscf import fci
 from pyscf.tools import fcidump
 from pyscf.ao2mo import restore
@@ -262,6 +263,9 @@ class ElectronicStructure(Hamiltonian):
             nelec=self.num_elec,
             nuc=self.constant,
         )
+
+    def to_MajoranaPair(self):
+        raise NotImplementedError
 
     @jit(nopython=True)
     def pauli_coeffs(self) -> (float, np.ndarray, np.ndarray):
