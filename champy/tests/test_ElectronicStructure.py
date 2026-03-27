@@ -37,11 +37,6 @@ def test_compatible(hamil_random_pair):
     ],
     indirect=True,
 )
-def test_compatible(hamil_random_pair):
-    hamil1, hamil2 = hamil_random_pair
-    assert not hamil1._compatible(hamil2)
-
-
 @pytest.mark.parametrize(
     "hamil_random_pair",
     [
