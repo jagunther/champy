@@ -1,5 +1,5 @@
 from champy.Hamiltonian import Hamiltonian
-from champy import MajoranaPair
+from champy.MajoranaPair import MajoranaPair
 from pyscf import fci
 from pyscf.tools import fcidump
 from pyscf.ao2mo import restore
@@ -265,7 +265,7 @@ class ElectronicStructure(Hamiltonian):
         )
 
     def to_MajoranaPair(self):
-        raise NotImplementedError
+        return MajoranaPair(h0=self.h0, h1e=self.h1e, h2e=self.h2e)
 
     @jit(nopython=True)
     def pauli_coeffs(self) -> (float, np.ndarray, np.ndarray):
@@ -364,4 +364,23 @@ class ElectronicStructure(Hamiltonian):
             for q in range(self.num_orb):
                 res += abs(self.h2e[p, q, p, q] / 4)
 
+        return res
+
+    def sum_pauli_coeffs_koridon(self) -> float:
+        res = 0
+        for p in range(self.num_orb):
+            for q in range(self.num_orb):
+                curr = self.h1e[p, q]
+                for r in range(self.num_orb):
+                    curr += self.h2e[p, q, r, r]
+                    curr -= 0.5 * self.h2e[p, r, r, q]
+                res += abs(curr)
+
+        for r in range(self.num_orb - 1):
+            for p in range(r + 1, self.num_orb):
+                for q in range(self.num_orb - 1):
+                    for s in range(q + 1, self.num_orb):
+                        res += abs(self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 2
+
+        res += np.sum(np.abs(self.h2e)) / 4
         return res

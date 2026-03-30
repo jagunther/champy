@@ -42,22 +42,20 @@ Additionally, $\Gamma_{pq,\sigma}^2 = I$ and $\Gamma_{pq,\sigma}^{\dag} = \Gamma
 
 The `MajoranaPair` class implements the Hamiltonian
 $$
-H = f_0 + \sum_{i}\sum_{\sigma} f_{i} \Gamma_{i\sigma} + \sum_{ij}\sum_{\sigma\tau}f_{ij}\Gamma_{i\sigma}\Gamma_{j\tau}.
+H = f_0 + \sum_{pq}\sum_{\sigma} f_{pq}\Gamma_{pq,\sigma} + \sum_{pqrs}\sum_{\sigma \tau}f_{pqrs} \Gamma_{pq,\sigma}\Gamma_{rs,\tau}
 $$
-where $i = (p,q), j=(r,s)$ may be seen as paired indices of underlying fermionic modes (use `np.reshape()` for example).
-The Hamiltonian is fully defined by the coefficients $f_0, f_i, f_{ij}$ and the commutation structure of the Majorana pairs.
+The Hamiltonian is fully defined by the coefficients $f_0, f_{pq}, f_{pqrs}$ and the commutation structure of the Majorana pairs.
 
 For most purposes, a Majorana pair Hamiltonian is constructed by mapping an electronic structure Hamiltonian to a Majorana pair Hamiltonian with:
 $$
 f_0 = \sum_p h_{pp} + \frac12\sum_{pr}(g_{pprr} - g_{prrp}) \\
-f_i = f_{pq} = \frac12\left(h_{pq} + \sum_r g_{pqrr} - \frac12\sum_r g_{prrq} \right)\\
-f_{ij} = f_{pqrs} = \frac18 g_{pqrs}.
+f_{pq} = \frac12\left(h_{pq} + \sum_r g_{pqrr} - \frac12\sum_r g_{prrq} \right)\\
+f_{pqrs} = \frac18 g_{pqrs}.
 $$
 Note that the 2-electron part of the Majorana pair Hamiltonian above contains duplicate terms. 
-A minimal representation in which every term is unique is
-$$
-    \sum_{ij\sigma\tau} f_{ij}\Gamma_{i\sigma}\Gamma_{j\tau} = \left(2\sum_i f_{ii}\right) I + 2\sum_i f_{ii}\Gamma_{i\uparrow}\Gamma_{i\downarrow} + 2\sum_{i<j:[i,j]=0}\sum_{\sigma} f_{ij} \Gamma_{i\sigma}\Gamma_{j\sigma} + 2\sum_{i<j}f_{ij}(\Gamma_{i\uparrow}\Gamma_{j\downarrow} + \Gamma_{i\downarrow}\Gamma_{j\uparrow}).
-$$
+Internally, the summation over indices $p,q,r,s$ is restricted to contain a term only once.
+The expression is derived by Mitarai et al., Quantum, 2023.
+
 
 ### Pauli Hamiltonian
 TODO

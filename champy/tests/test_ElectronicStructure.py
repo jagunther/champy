@@ -32,14 +32,6 @@ def test_compatible(hamil_random_pair):
 @pytest.mark.parametrize(
     "hamil_random_pair",
     [
-        {"num_orb1": 4, "num_orb2": 4, "num_elec1": 4, "num_elec2": 5},
-        {"num_orb1": 4, "num_orb2": 5, "num_elec1": 4, "num_elec2": 4},
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "hamil_random_pair",
-    [
         {"num_orb1": 4, "num_orb2": 4, "num_elec1": 4, "num_elec2": 4},
         {"num_orb1": 6, "num_orb2": 6, "num_elec1": 4, "num_elec2": 4},
     ],
@@ -142,6 +134,13 @@ def test_sum_pauli_coeffs(rhf_h2o):
     hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
     ref_value = 717  # from Koridon 2021 PRR
     assert abs(hamil.sum_pauli_coeffs() - ref_value) < 0.1
+
+
+def test_sum_pauli_coeffs_koridon(rhf_h2o):
+    rhf = rhf_h2o
+    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
+    ref_value = 717  # from Koridon 2021 PRR
+    assert abs(hamil.sum_pauli_coeffs_koridon() - ref_value) < 0.1
 
 
 def test_is_canonical_hf_basis(rhf_h2o):

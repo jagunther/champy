@@ -63,6 +63,14 @@ class PauliHamiltonian(Hamiltonian):
 
     __rmul__ = __mul__
 
+    def __eq__(self, other) -> bool:
+        if not self._compatible(other):
+            return False
+        return (
+            np.isclose(self._constant, other._constant)
+            and np.allclose(self.to_sparse_matrix().toarray(), other.to_sparse_matrix().toarray())
+        )
+
     @property
     def constant(self) -> float:
         return self._constant
