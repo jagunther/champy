@@ -24,7 +24,7 @@ class MajoranaPair(Hamiltonian):
             h0
             + np.trace(h1e)
             + 0.5 * np.einsum("pprr->", h2e)
-            - 0.5 * np.einsum("prrp->", h2e)
+            - 0.25 * np.einsum("prrp->", h2e)
         )
 
         # 1-el Majorana coefficients: Γ_pq,σ
@@ -46,7 +46,7 @@ class MajoranaPair(Hamiltonian):
         self.f2e_diffop_diffspin += np.where((p >= r) & (q > s), h2e, 0) / 4
 
         # 2-el Majorana coefficients, same operators, diff spin: Γ_pq,σ Γ_pq,τ
-        self.f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0)
+        self.f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0) / 4
 
     def _compatible(self, other):
         assert self.num_orb == other.num_orb
@@ -126,11 +126,9 @@ class MajoranaPair(Hamiltonian):
                 if self.f1e[p, q] == 0:
                     continue
                 for spin_offset in (0, n):
-                    labels.append(_jw_pauli_label(p, q, spin_offset, total_qubits))
-                    if p == q:
-                        weights.append(self.f1e[p, q])
-                    else:
-                        weights.append(-self.f1e[p, q])
+                    phase, l = _jw_pauli(p, q, spin_offset, total_qubits)
+                    labels.append(l)
+                    weights.append(phase * self.f1e[p, q])
 
         # 2-electron same spin, different operators: Γ_{pq,σ} Γ_{rs,σ}
         for p in range(n):
@@ -141,13 +139,13 @@ class MajoranaPair(Hamiltonian):
                         if coeff == 0:
                             continue
                         for spin_offset in (0, n):
-                            l1 = _jw_pauli_label(p, q, spin_offset, total_qubits)
-                            l2 = _jw_pauli_label(r, s, spin_offset, total_qubits)
+                            phase1, l1 = _jw_pauli(p, q, spin_offset, total_qubits)
+                            phase2, l2 = _jw_pauli(r, s, spin_offset, total_qubits)
                             phase, label = _multiply_pauli_strings(l1, l2)
                             labels.append(label)
-                            weights.append(coeff * phase)
+                            weights.append(coeff * phase1 * phase2 * phase)
 
-        # 2-electron different spin, different operators: Γ_{pq,↑} Γ_{rs,↓}
+        # 2-electron different spin, different operators: Γ_{pq,sigma} Γ_{rs,tau}
         for p in range(n):
             for q in range(n):
                 for r in range(n):
@@ -155,31 +153,29 @@ class MajoranaPair(Hamiltonian):
                         coeff = self.f2e_diffop_diffspin[p, q, r, s]
                         if coeff == 0:
                             continue
-                        l_up = _jw_pauli_label(p, q, 0, total_qubits)
-                        l_down = _jw_pauli_label(r, s, n, total_qubits)
-                        phase, label = _multiply_pauli_strings(l_up, l_down)
-                        labels.append(label)
-                        weights.append(coeff * phase)
+                        for spin_offset in [(0, n), (n, 0)]:
+                            phase1, l1 = _jw_pauli(p, q, spin_offset[0], total_qubits)
+                            phase2, l2 = _jw_pauli(r, s, spin_offset[1], total_qubits)
+                            phase, label = _multiply_pauli_strings(l1, l2)
+                            labels.append(label)
+                            weights.append(coeff * phase1 * phase2 * phase)
 
         # 2-electron same operator, different spin: Γ_{pq,↑} Γ_{pq,↓}
         for p in range(n):
             for q in range(n):
-                for r in range(n):
-                    for s in range(n):
-                        coeff = self.f2e_sameop_diffspin[p, q, r, s]
-                        if coeff == 0:
-                            continue
-                        l_up = _jw_pauli_label(p, q, 0, total_qubits)
-                        l_down = _jw_pauli_label(r, s, n, total_qubits)
-                        phase, label = _multiply_pauli_strings(l_up, l_down)
-                        labels.append(label)
-                        weights.append(coeff * phase)
+                coeff = self.f2e_sameop_diffspin[p, q, p, q]
+                if coeff == 0:
+                    continue
+                phase1, l1 = _jw_pauli(p, q, 0, total_qubits)
+                phase2, l2 = _jw_pauli(p, q, n, total_qubits)
+                phase, label = _multiply_pauli_strings(l1, l2)
+                labels.append(label)
+                weights.append(coeff * phase1 * phase2 * phase)
 
-        print(labels)
         return PauliHamiltonian.from_labels_and_weights(labels, weights)
 
 
-def _jw_pauli_label(p, q, spin_offset, total_qubits):
+def _jw_pauli(p, q, spin_offset, total_qubits):
     """Pauli string for Majorana pair operator Γ_{pq,σ} in a given spin sector
         in the Jordan-Wigner encoding.
 
@@ -188,9 +184,12 @@ def _jw_pauli_label(p, q, spin_offset, total_qubits):
     p > q:  X_q Z_{q+1}...Z_{p-1} X_p
     """
     chars = ["I"] * total_qubits
+    phase = None
     if p == q:
         chars[spin_offset + p] = "Z"
+        phase = -1
     else:
+        phase = 1
         lo, hi = min(p, q), max(p, q)
         for k in range(lo + 1, hi):
             chars[spin_offset + k] = "Z"
@@ -200,7 +199,7 @@ def _jw_pauli_label(p, q, spin_offset, total_qubits):
     if p < q:
         chars[spin_offset + p] = "Y"
         chars[spin_offset + q] = "Y"
-    return "".join(chars)
+    return phase, "".join(chars)
 
 
 _PAULI_PRODUCT = {
