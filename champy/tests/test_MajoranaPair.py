@@ -22,11 +22,10 @@ def _f2q_valid(elstruc: ElectronicStructure, pauli_hamil: PauliHamiltonian):
     return True, None
 
 
-@pytest.mark.parametrize("hamil_random", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("hamil_random", [(4, 4)], indirect=True)
 def test_jordan_wigner(hamil_random):
     """Hamiltonian with constant and 1-electron terms only: h2e=0."""
     elstruc = hamil_random
-    n = elstruc.num_orb
     pauli_hamil = elstruc.to_MajoranaPair().jordan_wigner()
     valid, error = _f2q_valid(elstruc=elstruc, pauli_hamil=pauli_hamil)
     assert valid

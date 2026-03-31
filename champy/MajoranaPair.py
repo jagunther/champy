@@ -1,6 +1,7 @@
 from champy.Hamiltonian import Hamiltonian
 from champy.PauliHamiltonian import PauliHamiltonian
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 class MajoranaPair(Hamiltonian):
@@ -47,6 +48,7 @@ class MajoranaPair(Hamiltonian):
 
         # 2-el Majorana coefficients, same operators, diff spin: Γ_pq,σ Γ_pq,τ
         self.f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0) / 4
+        self.f2e_sameop_diffspin = np.einsum("pqpq->pq", self.f2e_sameop_diffspin)
 
     def _compatible(self, other):
         assert self.num_orb == other.num_orb
@@ -110,15 +112,114 @@ class MajoranaPair(Hamiltonian):
     def ground_state(self):
         raise NotImplementedError
 
+    def commutation_graph(self):
+        """
+        Compute adjacency matrix of all 2n^2 Majorana Pairs.
+        Operators are ordered as (p,q,σ) with flat index σ*n²+p*n+q,
+        so spin-up block comes first, spin-down second.
+
+        Two pairs (pq,σ) and (rs,τ) anticommute iff σ==τ and (p==r or q==s).
+        """
+        n = self.num_orb
+        p, q, r, s = np.ogrid[:n, :n, :n, :n]
+        # same-spin anticommutation block: shape (n², n²)
+        same_spin_block = ((p == r) | (q == s)).reshape(n * n, n * n).astype(np.int8)
+
+        adj = np.zeros((2 * n * n, 2 * n * n), dtype=np.int8)
+        adj[: n * n, : n * n] = same_spin_block  # spin-up vs spin-up
+        adj[n * n :, n * n :] = same_spin_block  # spin-down vs spin-down
+        return adj
+
+    def majoranapair_index(self, p: int, q: int, sigma: int) -> int:
+        """Return the flat index of Γ_{pq,σ} in the commutation graph adjacency matrix.
+
+        Index = sigma * n² + p * n + q,  sigma ∈ {0, 1}.
+        """
+        n = self.num_orb
+        return sigma * n * n + p * n + q
+
+    def majoranapair_weights(self) -> np.ndarray:
+
+        n = self.num_orb
+        weights = np.zeros((n, n, 2))
+        weights += np.abs(self.f1e)[:, :, np.newaxis]
+
+        for f in [self.f2e_diffopp_samespin, self.f2e_diffop_diffspin]:
+            weights += np.einsum("pqrs->pq", np.abs(f))[:, :, np.newaxis]
+            weights += np.einsum("pqrs->rs", np.abs(f))[:, :, np.newaxis]
+
+        weights += np.abs(self.f2e_sameop_diffspin)[:, :, np.newaxis]
+        return weights
+
+    def plot_orbital_graph(self) -> None:
+        """Plot the orbital graph for the spin-↑ sector.
+
+        Γ_pp → vertex p  (size and color proportional to weight)
+        Γ_pq → directed edge p→q  (width and color proportional to weight)
+        """
+        n = self.num_orb
+        w = self.majoranapair_weights()[:, :, 0]
+        max_w = w.max()
+
+        _, ax = plt.subplots(figsize=(6, 6))
+
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + np.pi / 2
+        pos = {p: np.array([np.cos(angles[p]), np.sin(angles[p])]) for p in range(n)}
+
+        # Directed edges (p != q)
+        for p in range(n):
+            for q in range(n):
+                if p == q:
+                    continue
+                width = w[p, q] / max_w
+                if width < 1e-6:
+                    continue
+                ax.annotate(
+                    "",
+                    xy=pos[q], xytext=pos[p],
+                    arrowprops=dict(
+                        arrowstyle="-|>",
+                        color=plt.cm.Blues(0.3 + 0.7 * width),
+                        lw=0.5 + 4.5 * width,
+                        connectionstyle="arc3,rad=0.15",
+                        mutation_scale=12 + 8 * width,
+                    ),
+                )
+
+        # Vertices (p == p)
+        max_diag = w[np.arange(n), np.arange(n)].max()
+        for p in range(n):
+            diag_w = w[p, p]
+            size = 0.06 + 0.10 * diag_w / max_diag
+            circle = plt.Circle(
+                pos[p], size,
+                facecolor=plt.cm.Oranges(0.4 + 0.6 * diag_w / max_diag),
+                edgecolor="black", linewidth=1.5, zorder=3,
+            )
+            ax.add_patch(circle)
+            ax.text(*pos[p], str(p), ha="center", va="center",
+                    fontsize=13, fontweight="bold", zorder=4)
+
+        ax.set_xlim(-1.5, 1.5)
+        ax.set_ylim(-1.5, 1.5)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        ax.set_title(
+            "Orbital graph (spin-↑ sector)\n"
+            r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → directed edge",
+            fontsize=11,
+        )
+        plt.show()
+
     def jordan_wigner(self) -> PauliHamiltonian:
         n = self.num_orb
         total_qubits = 2 * n
         labels = []
-        weights = []
+        coeffs = []
 
         # constant
         labels.append("I" * total_qubits)
-        weights.append(self.constant)
+        coeffs.append(self.constant)
 
         # 1-electron: f1e[p,q] maps to one Pauli per spin sector
         for p in range(n):
@@ -128,7 +229,7 @@ class MajoranaPair(Hamiltonian):
                 for spin_offset in (0, n):
                     phase, l = _jw_pauli(p, q, spin_offset, total_qubits)
                     labels.append(l)
-                    weights.append(phase * self.f1e[p, q])
+                    coeffs.append(phase * self.f1e[p, q])
 
         # 2-electron same spin, different operators: Γ_{pq,σ} Γ_{rs,σ}
         for p in range(n):
@@ -143,9 +244,9 @@ class MajoranaPair(Hamiltonian):
                             phase2, l2 = _jw_pauli(r, s, spin_offset, total_qubits)
                             phase, label = _multiply_pauli_strings(l1, l2)
                             labels.append(label)
-                            weights.append(coeff * phase1 * phase2 * phase)
+                            coeffs.append(coeff * phase1 * phase2 * phase)
 
-        # 2-electron different spin, different operators: Γ_{pq,sigma} Γ_{rs,tau}
+        # 2-electron different spin, different operators: Γ_{pq,σ} Γ_{rs,τ}
         for p in range(n):
             for q in range(n):
                 for r in range(n):
@@ -158,21 +259,21 @@ class MajoranaPair(Hamiltonian):
                             phase2, l2 = _jw_pauli(r, s, spin_offset[1], total_qubits)
                             phase, label = _multiply_pauli_strings(l1, l2)
                             labels.append(label)
-                            weights.append(coeff * phase1 * phase2 * phase)
+                            coeffs.append(coeff * phase1 * phase2 * phase)
 
         # 2-electron same operator, different spin: Γ_{pq,↑} Γ_{pq,↓}
         for p in range(n):
             for q in range(n):
-                coeff = self.f2e_sameop_diffspin[p, q, p, q]
+                coeff = self.f2e_sameop_diffspin[p, q]
                 if coeff == 0:
                     continue
                 phase1, l1 = _jw_pauli(p, q, 0, total_qubits)
                 phase2, l2 = _jw_pauli(p, q, n, total_qubits)
                 phase, label = _multiply_pauli_strings(l1, l2)
                 labels.append(label)
-                weights.append(coeff * phase1 * phase2 * phase)
+                coeffs.append(coeff * phase1 * phase2 * phase)
 
-        return PauliHamiltonian.from_labels_and_weights(labels, weights)
+        return PauliHamiltonian.from_labels_and_weights(labels, coeffs)
 
 
 def _jw_pauli(p, q, spin_offset, total_qubits):
