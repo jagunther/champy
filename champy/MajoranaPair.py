@@ -167,7 +167,8 @@ class MajoranaPair(Hamiltonian):
 
         cmap = plt.colormaps["Blues"]
         diag_vals = w[np.arange(n), np.arange(n)]
-        norm = mcolors.Normalize(vmin=0, vmax=w.max())
+        nonzero = w[w > 0]
+        norm = mcolors.LogNorm(vmin=nonzero.min(), vmax=w.max())
 
         # Build graph with edge weights
         G = nx.Graph()
