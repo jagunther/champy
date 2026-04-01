@@ -163,7 +163,7 @@ class MajoranaPair(Hamiltonian):
         n = self.num_orb
         w = self.majoranapair_weights()[:, :, 0]
 
-        cmap = plt.colormaps["Blues"]
+        cmap = plt.colormaps["turbo"]
         diag_vals = w[np.arange(n), np.arange(n)]
         edge_vals = np.array([w[p, q] for p in range(n) for q in range(p + 1, n)])
         norm = mcolors.Normalize(vmin=0, vmax=w.max())
