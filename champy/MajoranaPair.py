@@ -154,51 +154,66 @@ class MajoranaPair(Hamiltonian):
     def plot_orbital_graph(self) -> None:
         """Plot the orbital graph for the spin-↑ sector.
 
-        Γ_pp → vertex p  (size and color proportional to weight)
-        Γ_pq → directed edge p→q  (width and color proportional to weight)
+        Γ_pp → vertex p  (color proportional to weight)
+        Γ_pq → undirected edge  (color proportional to weight of (p,q))
         """
+        import matplotlib.colors as mcolors
+        import matplotlib.colorbar as mcolorbar
+
         n = self.num_orb
         w = self.majoranapair_weights()[:, :, 0]
-        max_w = w.max()
 
-        _, ax = plt.subplots(figsize=(6, 6))
+        cmap = plt.colormaps["Blues"]
+        diag_vals = w[np.arange(n), np.arange(n)]
+        edge_vals = np.array([w[p, q] for p in range(n) for q in range(p + 1, n)])
+        norm = mcolors.Normalize(vmin=0, vmax=w.max())
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        fig.subplots_adjust(right=0.78)
 
         angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + np.pi / 2
         pos = {p: np.array([np.cos(angles[p]), np.sin(angles[p])]) for p in range(n)}
 
-        # Directed edges (p != q)
+        # Undirected edges (p < q to draw each pair once)
         for p in range(n):
-            for q in range(n):
-                if p == q:
+            for q in range(p + 1, n):
+                val = w[p, q]
+                if val < 1e-6 * edge_vals.max():
                     continue
-                width = w[p, q] / max_w
-                if width < 1e-6:
-                    continue
-                ax.annotate(
-                    "",
-                    xy=pos[q], xytext=pos[p],
-                    arrowprops=dict(
-                        arrowstyle="-|>",
-                        color=plt.cm.Blues(0.3 + 0.7 * width),
-                        lw=0.5 + 4.5 * width,
-                        connectionstyle="arc3,rad=0.15",
-                        mutation_scale=12 + 8 * width,
-                    ),
-                )
+                xs = [pos[p][0], pos[q][0]]
+                ys = [pos[p][1], pos[q][1]]
+                ax.plot(xs, ys, color=cmap(norm(val)), lw=2, zorder=1)
 
-        # Vertices (p == p)
-        max_diag = w[np.arange(n), np.arange(n)].max()
+        # Vertices
+        NODE_RADIUS = 0.12
         for p in range(n):
-            diag_w = w[p, p]
-            size = 0.06 + 0.10 * diag_w / max_diag
             circle = plt.Circle(
-                pos[p], size,
-                facecolor=plt.cm.Oranges(0.4 + 0.6 * diag_w / max_diag),
-                edgecolor="black", linewidth=1.5, zorder=3,
+                pos[p],
+                NODE_RADIUS,
+                facecolor=cmap(norm(diag_vals[p])),
+                edgecolor="black",
+                linewidth=1.5,
+                zorder=3,
             )
             ax.add_patch(circle)
-            ax.text(*pos[p], str(p), ha="center", va="center",
-                    fontsize=13, fontweight="bold", zorder=4)
+            r, g, b, _ = cmap(norm(diag_vals[p]))
+            luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            text_color = "white" if luminance < 0.5 else "black"
+            ax.text(
+                *pos[p],
+                str(p),
+                ha="center",
+                va="center",
+                fontsize=13,
+                fontweight="bold",
+                color=text_color,
+                zorder=4,
+            )
+
+        # Colorbar
+        cax = fig.add_axes([0.82, 0.15, 0.03, 0.7])
+        mcolorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation="vertical")
+        cax.set_title(r"$w$", fontsize=10)
 
         ax.set_xlim(-1.5, 1.5)
         ax.set_ylim(-1.5, 1.5)
@@ -206,7 +221,7 @@ class MajoranaPair(Hamiltonian):
         ax.axis("off")
         ax.set_title(
             "Orbital graph (spin-↑ sector)\n"
-            r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → directed edge",
+            r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
             fontsize=11,
         )
         plt.show()

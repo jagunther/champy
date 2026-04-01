@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+from unittest.mock import patch
 from champy.ElectronicStructure import ElectronicStructure
 from champy.PauliHamiltonian import PauliHamiltonian
 
@@ -20,6 +21,15 @@ def _f2q_valid(elstruc: ElectronicStructure, pauli_hamil: PauliHamiltonian):
         if not np.any(np.isclose(spec_pauli, e, atol=1e-6)):
             return False, e
     return True, None
+
+
+@pytest.mark.parametrize("hamil_random", [(4, 4)], indirect=True)
+def test_plot_orbital_graph(hamil_random):
+    """plot_orbital_graph() runs without error on a random Hamiltonian."""
+    majorana = hamil_random.to_MajoranaPair()
+    with patch("matplotlib.pyplot.show"):
+        result = majorana.plot_orbital_graph()
+    assert result is None
 
 
 @pytest.mark.parametrize("hamil_random", [(4, 4)], indirect=True)
