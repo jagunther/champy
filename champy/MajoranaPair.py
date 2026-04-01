@@ -152,40 +152,45 @@ class MajoranaPair(Hamiltonian):
         return weights
 
     def plot_orbital_graph(self) -> None:
-        """Plot the orbital graph for the spin-↑ sector.
+        """Plot the orbital graph for the spin-↑ sector using a spring layout.
 
+        Edge weights drive the spring forces: heavier edges pull nodes closer.
         Γ_pp → vertex p  (color proportional to weight)
-        Γ_pq → undirected edge  (color proportional to weight of (p,q))
+        Γ_pq → undirected edge  (color proportional to weight)
         """
+        import networkx as nx
         import matplotlib.colors as mcolors
         import matplotlib.colorbar as mcolorbar
 
         n = self.num_orb
         w = self.majoranapair_weights()[:, :, 0]
 
-        cmap = plt.colormaps["turbo"]
+        cmap = plt.colormaps["Blues"]
         diag_vals = w[np.arange(n), np.arange(n)]
-        edge_vals = np.array([w[p, q] for p in range(n) for q in range(p + 1, n)])
         norm = mcolors.Normalize(vmin=0, vmax=w.max())
+
+        # Build graph with edge weights
+        G = nx.Graph()
+        G.add_nodes_from(range(n))
+        for p in range(n):
+            for q in range(p + 1, n):
+                if w[p, q] > 1e-6 * w.max():
+                    G.add_edge(p, q, weight=w[p, q])
+
+        pos = nx.spring_layout(G, weight="weight", seed=42)
 
         fig, ax = plt.subplots(figsize=(6, 6))
         fig.subplots_adjust(right=0.78)
 
-        angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + np.pi / 2
-        pos = {p: np.array([np.cos(angles[p]), np.sin(angles[p])]) for p in range(n)}
-
-        # Undirected edges (p < q to draw each pair once)
-        for p in range(n):
-            for q in range(p + 1, n):
-                val = w[p, q]
-                if val < 1e-6 * edge_vals.max():
-                    continue
-                xs = [pos[p][0], pos[q][0]]
-                ys = [pos[p][1], pos[q][1]]
-                ax.plot(xs, ys, color=cmap(norm(val)), lw=2, zorder=1)
+        # Edges
+        for p, q in G.edges():
+            val = w[p, q]
+            xs = [pos[p][0], pos[q][0]]
+            ys = [pos[p][1], pos[q][1]]
+            ax.plot(xs, ys, color=cmap(norm(val)), lw=2, zorder=1)
 
         # Vertices
-        NODE_RADIUS = 0.12
+        NODE_RADIUS = 0.05
         for p in range(n):
             circle = plt.Circle(
                 pos[p],
@@ -194,6 +199,7 @@ class MajoranaPair(Hamiltonian):
                 edgecolor="black",
                 linewidth=1.5,
                 zorder=3,
+                transform=ax.transData,
             )
             ax.add_patch(circle)
             r, g, b, _ = cmap(norm(diag_vals[p]))
@@ -215,10 +221,9 @@ class MajoranaPair(Hamiltonian):
         mcolorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation="vertical")
         cax.set_title(r"$w$", fontsize=10)
 
-        ax.set_xlim(-1.5, 1.5)
-        ax.set_ylim(-1.5, 1.5)
         ax.set_aspect("equal")
         ax.axis("off")
+        ax.autoscale_view()
         ax.set_title(
             "Orbital graph (spin-↑ sector)\n"
             r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
