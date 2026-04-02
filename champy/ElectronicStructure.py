@@ -7,6 +7,9 @@ from pyscf.ao2mo import restore
 from pyscf.mcscf import CASCI
 import numpy as np
 import scipy
+import scipy.optimize
+import scipy.sparse
+import scipy.sparse.csgraph
 from numba import jit
 import copy
 
@@ -25,6 +28,7 @@ class ElectronicStructure(Hamiltonian):
         self.h1e = h1e
         self.h2e = h2e
         self.num_elec = num_elec
+        self.orb_symmetries = self._find_orb_symmetries()
         super().__init__()
 
     def _compatible(self, other):
@@ -88,6 +92,46 @@ class ElectronicStructure(Hamiltonian):
     @property
     def dimension(self) -> int:
         return int(scipy.special.binom(self.num_orb, self.num_elec // 2) ** 2)
+
+    def orbital_interaction_graph(self, threshold: float = 1e-7) -> np.ndarray:
+        """Returns |h1e_pq| + Σ_r |h2e_pqrr|, with entries below threshold set to zero."""
+        conn = np.abs(self.h1e) + np.einsum("pqrr->pq", np.abs(self.h2e))
+        conn[conn < threshold] = 0.0
+        return conn
+
+    def _find_orb_symmetries(self, threshold: float = 1e-7) -> np.ndarray:
+        """Assign each MO a connected-component index based on h1e and h2e connectivity."""
+        conn = self.orbital_interaction_graph(threshold)
+        adj = scipy.sparse.csr_matrix((conn > 0).astype(np.int8))
+        _, labels = scipy.sparse.csgraph.connected_components(adj, directed=False)
+        return labels
+
+    def plot_orbital_interaction_graph(self) -> None:
+        """Display the orbital interaction graph as a heatmap."""
+        import matplotlib.pyplot as plt
+
+        data = self.orbital_interaction_graph()
+        cmap = plt.colormaps["Blues"].copy()
+        cmap.set_under("lightgrey")
+
+        vmin = data[data > 0].min() if np.any(data > 0) else 1.0
+
+        fig, ax = plt.subplots()
+        im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=data.max())
+        fig.colorbar(
+            im, ax=ax, label=r"$|h_{pq}^{1e}| + \sum_{r}|h_{pqrr}^{2e}|$", extend="min"
+        )
+        ax.set_xlabel("MO index q")
+        ax.set_ylabel("MO index p")
+        ax.set_title("Orbital interaction graph")
+        plt.show()
+
+    def symmetry_ordering(self) -> None:
+        """Reorder MOs in-place by orb_symmetries index, grouping each symmetry block."""
+        idx = np.argsort(self.orb_symmetries, kind="stable")
+        self.h1e = self.h1e[np.ix_(idx, idx)]
+        self.h2e = self.h2e[np.ix_(idx, idx, idx, idx)]
+        self.orb_symmetries = self.orb_symmetries[idx]
 
     def to_sparse_matrix(self) -> scipy.sparse.csr_matrix:
         """
@@ -357,16 +401,15 @@ class ElectronicStructure(Hamiltonian):
         res += np.sum(np.abs(self.h2e)) / 4
         return res
 
-    def rotate_orbitals(self, rotation: np.ndarray):
+    def rotate_orbitals(self, rotation: np.ndarray, inplace=False):
         """
         Performs orbital rotation on the hamiltonian coefficients. The rotation o is either
         given directly as an element of O(n). Or it is given as a Lie-algebra element kappa in so(n),
         s.t. o = exp(kappa) and parameterized by the lower triangular entries x_kappa
         via np.tril_indices(norb, -1).
 
-        :arg hamil: Hamiltonian to be rotated. Method only works on integrals if hamil is already
-                in integrals format. Otherwise, it works with factorized format.
         :arg rotation: Rotation, either element of O(n) or so(n)
+        :arg inplace: True for replacing integrals of self, False for returning rotated integrals
         :return: rotated Hamiltonian, integrals (default) or factorized format (if input is factorized)
         :rtype: typle[float, np.ndarray, np.ndarray]
         """
@@ -385,4 +428,32 @@ class ElectronicStructure(Hamiltonian):
         h2e_rot = np.einsum("tqrs,qu->turs", h2e_rot, o, optimize="optimal")
         h2e_rot = np.einsum("turs,rv->tuvs", h2e_rot, o, optimize="optimal")
         h2e_rot = np.einsum("tuvs,sw->tuvw", h2e_rot, o, optimize="optimal")
-        return self.h0, h1e_rot, h2e_rot
+        if inplace:
+            self.h1e = h1e_rot
+            self.h2e = h2e_rot
+        else:
+            return self.h0, h1e_rot, h2e_rot
+
+    def optimize_orbitals(self, method: str = "L-BFGS-B", perturbation: float = 1e-2, seed: int = None) -> scipy.optimize.OptimizeResult:
+        """Minimize sum_pauli_coeffs() over orbital rotations, updating h1e and h2e in-place.
+
+        The optimization is over the Lie-algebra parameters x_kappa ∈ so(n),
+        starting from a small random perturbation around the identity (x_kappa = 0).
+
+        :param method: scipy.optimize.minimize method, default 'L-BFGS-B'
+        :param perturbation: std of the Gaussian initial perturbation, default 1e-2
+        :param seed: random seed for reproducibility, default None
+        :return: OptimizeResult from scipy.optimize.minimize
+        """
+        n_params = self.num_orb * (self.num_orb - 1) // 2
+        rng = np.random.default_rng(seed)
+        x0 = rng.standard_normal(n_params) * perturbation
+
+        def objective(x_kappa):
+            h0, h1e, h2e = self.rotate_orbitals(x_kappa.astype(float))
+            rotated = ElectronicStructure(h0, h1e, h2e, self.num_elec)
+            return rotated.sum_pauli_coeffs()
+
+        result = scipy.optimize.minimize(objective, x0, method=method)
+        self.rotate_orbitals(result.x.astype(float), inplace=True)
+        return result
