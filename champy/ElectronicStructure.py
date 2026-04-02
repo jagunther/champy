@@ -1,5 +1,6 @@
 from champy.Hamiltonian import Hamiltonian
 from champy.MajoranaPair import MajoranaPair
+from champy.rotation import liealgebra_to_rotation
 from pyscf import fci
 from pyscf.tools import fcidump
 from pyscf.ao2mo import restore
@@ -333,54 +334,55 @@ class ElectronicStructure(Hamiltonian):
         Compute the sum of absolute values of coefficients of Hamiltonian expressed in terms of Paulis
         after fermion-to-qubit mapping.
         """
-        res = 0
-        for p in range(self.num_orb):
-            for q in range(self.num_orb):
-                curr = self.h1e[p, q]
-                for r in range(self.num_orb):
-                    curr += self.h2e[p, q, r, r]
-                    curr -= 0.5 * self.h2e[p, r, r, q]
-                res += abs(curr)
+        n = self.num_orb
 
-        for r in range(self.num_orb - 1):
-            for p in range(r + 1, self.num_orb):
-                for q in range(self.num_orb - 1):
-                    for s in range(q + 1, self.num_orb):
-                        res += abs(self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 2
+        # 1-electron part (vectorised)
+        curr = (
+            self.h1e
+            + np.einsum("pqrr->pq", self.h2e)
+            - 0.5 * np.einsum("prrq->pq", self.h2e)
+        )
+        res = np.sum(np.abs(curr))
 
-        for r in range(self.num_orb - 1):
-            for p in range(r + 1, self.num_orb):
-                for q in range(self.num_orb):
-                    for s in range(q, self.num_orb):
-                        res += abs(self.h2e[p, q, r, s] / 2)
-
-        for r in range(self.num_orb):
-            for p in range(r, self.num_orb):
-                for q in range(1, self.num_orb):
-                    for s in range(q):
-                        res += abs(self.h2e[p, q, r, s] / 2)
-
-        for p in range(self.num_orb):
-            for q in range(self.num_orb):
-                res += abs(self.h2e[p, q, p, q] / 4)
-
-        return res
-
-    def sum_pauli_coeffs_koridon(self) -> float:
-        res = 0
-        for p in range(self.num_orb):
-            for q in range(self.num_orb):
-                curr = self.h1e[p, q]
-                for r in range(self.num_orb):
-                    curr += self.h2e[p, q, r, r]
-                    curr -= 0.5 * self.h2e[p, r, r, q]
-                res += abs(curr)
-
-        for r in range(self.num_orb - 1):
-            for p in range(r + 1, self.num_orb):
-                for q in range(self.num_orb - 1):
-                    for s in range(q + 1, self.num_orb):
-                        res += abs(self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 2
+        # 2-electron antisymmetric part: sum |h2e[p,q,r,s] - h2e[p,s,r,q]| / 2
+        # for p > r, q < s — use triangle indices to avoid O(n^4) boolean mask
+        p_idx, r_idx = np.tril_indices(n, k=-1)  # p > r
+        q_idx, s_idx = np.triu_indices(n, k=1)  # q < s
+        p2, r2 = p_idx[:, None], r_idx[:, None]  # (n_pr, 1)
+        q2, s2 = q_idx[None, :], s_idx[None, :]  # (1, n_qs)
+        vals = self.h2e[p2, q2, r2, s2]
+        vals = vals - self.h2e[p2, s2, r2, q2]
+        res += np.sum(np.abs(vals)) / 2
 
         res += np.sum(np.abs(self.h2e)) / 4
         return res
+
+    def rotate_orbitals(self, rotation: np.ndarray):
+        """
+        Performs orbital rotation on the hamiltonian coefficients. The rotation o is either
+        given directly as an element of O(n). Or it is given as a Lie-algebra element kappa in so(n),
+        s.t. o = exp(kappa) and parameterized by the lower triangular entries x_kappa
+        via np.tril_indices(norb, -1).
+
+        :arg hamil: Hamiltonian to be rotated. Method only works on integrals if hamil is already
+                in integrals format. Otherwise, it works with factorized format.
+        :arg rotation: Rotation, either element of O(n) or so(n)
+        :return: rotated Hamiltonian, integrals (default) or factorized format (if input is factorized)
+        :rtype: typle[float, np.ndarray, np.ndarray]
+        """
+
+        if rotation.shape == (self.num_orb, self.num_orb):
+            o = rotation
+        elif rotation.shape == (self.num_orb * (self.num_orb - 1) // 2,):
+            x_kappa = rotation
+            o = liealgebra_to_rotation(self.num_orb, x_kappa)
+        else:
+            raise ValueError("rotation does not fit any format")
+
+        # integrals h1e, h2e
+        h1e_rot = np.einsum("pq,pr,qs->rs", self.h1e, o, o, optimize="optimal")
+        h2e_rot = np.einsum("pqrs,pt->tqrs", self.h2e, o, optimize="optimal")
+        h2e_rot = np.einsum("tqrs,qu->turs", h2e_rot, o, optimize="optimal")
+        h2e_rot = np.einsum("turs,rv->tuvs", h2e_rot, o, optimize="optimal")
+        h2e_rot = np.einsum("tuvs,sw->tuvw", h2e_rot, o, optimize="optimal")
+        return self.h0, h1e_rot, h2e_rot

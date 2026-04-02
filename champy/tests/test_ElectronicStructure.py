@@ -136,13 +136,6 @@ def test_sum_pauli_coeffs(rhf_h2o):
     assert abs(hamil.sum_pauli_coeffs() - ref_value) < 0.1
 
 
-def test_sum_pauli_coeffs_koridon(rhf_h2o):
-    rhf = rhf_h2o
-    hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
-    ref_value = 717  # from Koridon 2021 PRR
-    assert abs(hamil.sum_pauli_coeffs_koridon() - ref_value) < 0.1
-
-
 def test_is_canonical_hf_basis(rhf_h2o):
     rhf = rhf_h2o
     hamil = ElectronicStructure.from_pyscf(rhf, num_orb=24, num_elec=10)
@@ -183,3 +176,17 @@ def test_onv_basis(rhf_h2o):
     hf_state = hamil.hf_state()
     idx_onv = np.where(hf_state == 1)[0][0]
     assert hamil.onv_basis()[idx_onv] == "000111000111"
+
+
+def test_rotate_orbitals_hamiltonian(rhf_h2o):
+    norb = 6
+    hamil = ElectronicStructure.from_pyscf(rhf_h2o, num_orb=norb, num_elec=norb)
+    rng = np.random.default_rng(42)
+    x_kappa = rng.standard_normal(norb * (norb - 1) // 2)
+    e_ref = hamil.ground_state_energy()
+
+    h0_rot, h1e_rot, h2e_rot = hamil.rotate_orbitals(x_kappa)
+    hamil_rot = ElectronicStructure(h0_rot, h1e_rot, h2e_rot, hamil.num_elec)
+    e = hamil_rot.ground_state_energy()
+
+    assert abs(e - e_ref) < 1e-9
