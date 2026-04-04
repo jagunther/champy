@@ -28,8 +28,38 @@ class ElectronicStructure(Hamiltonian):
         self.h1e = h1e
         self.h2e = h2e
         self.num_elec = num_elec
+        self.hf_state = self._init_hf_state()
         self.orb_symmetries = self._find_orb_symmetries()
         super().__init__()
+
+    def _init_hf_state(self) -> np.ndarray | None:
+        """Return occupation vector [spin-up | spin-down] of length 2*num_orb if the default
+        occupation (first num_occ orbitals) is a valid canonical HF state, else None."""
+        assert self.num_elec % 2 == 0
+        num_occ = self.num_elec // 2
+        n = self.num_orb
+        default_occ = np.arange(num_occ)
+
+        # compute Fock with default occupation
+        fock = copy.deepcopy(self.h1e)
+        fock += 2 * np.sum(self.h2e[:, :, default_occ, default_occ], axis=-1)
+        fock -= np.sum(self.h2e[:, default_occ, default_occ, :], axis=1)
+
+        # check Fock is diagonal
+        f_offdiag = fock.copy()
+        np.fill_diagonal(f_offdiag, 0)
+        if not np.all(np.abs(f_offdiag) < 1e-6):
+            return None
+
+        # check first num_occ orbital energies are the lowest
+        orb_energies = np.diag(fock)
+        if not np.all(orb_energies[:num_occ] <= orb_energies[num_occ:].min()):
+            return None
+
+        occ_vec = np.zeros(2 * n, dtype=int)
+        occ_vec[:num_occ] = 1
+        occ_vec[n:n + num_occ] = 1
+        return occ_vec
 
     def _compatible(self, other):
         if self.num_elec == other.num_elec and self.num_orb == other.num_orb:
@@ -132,6 +162,9 @@ class ElectronicStructure(Hamiltonian):
         self.h1e = self.h1e[np.ix_(idx, idx)]
         self.h2e = self.h2e[np.ix_(idx, idx, idx, idx)]
         self.orb_symmetries = self.orb_symmetries[idx]
+        if self.hf_state is not None:
+            n = self.num_orb
+            self.hf_state = np.concatenate([self.hf_state[:n][idx], self.hf_state[n:][idx]])
 
     def to_sparse_matrix(self) -> scipy.sparse.csr_matrix:
         """
@@ -195,11 +228,12 @@ class ElectronicStructure(Hamiltonian):
 
         :return: fock operator, num_orb x num_orb np.array
         """
-        assert self.num_elec % 2 == 0
-        num_occ = self.num_elec // 2
+        if self.hf_state is None:
+            raise RuntimeError("hf_state is not set — not in canonical HF basis")
+        occ = np.where(self.hf_state[:self.num_orb] == 1)[0]
         fock_op = copy.deepcopy(self.h1e)
-        fock_op += 2 * np.einsum("ijkk -> ij", self.h2e[:, :, :num_occ, :num_occ])
-        fock_op -= np.einsum("ikkj -> ij", self.h2e[:, :num_occ, :num_occ, :])
+        fock_op += 2 * np.sum(self.h2e[:, :, occ, occ], axis=-1)
+        fock_op -= np.sum(self.h2e[:, occ, occ, :], axis=1)
         return fock_op
 
     def hf_orbital_energies(self) -> np.ndarray:
@@ -230,38 +264,39 @@ class ElectronicStructure(Hamiltonian):
 
         :return: HF energy
         """
-        assert self.num_elec % 2 == 0
-        num_occ = self.num_elec // 2
+        if self.hf_state is None:
+            raise RuntimeError("hf_state is not set — not in canonical HF basis")
         if not self.is_canonical_hf_basis():
             raise RuntimeError(f"Not in canonical orbital basis")
-        else:
-            e = self.constant
-            e += 2 * np.sum(np.diag(self.h1e)[:num_occ])
-            for i in range(num_occ):
-                for j in range(num_occ):
-                    e += 2 * self.h2e[i, i, j, j]
-                    e -= self.h2e[i, j, j, i]
-            return e
+        occ = np.where(self.hf_state[:self.num_orb] == 1)[0]
+        e = self.constant
+        e += 2 * np.sum(np.diag(self.h1e)[occ])
+        for i in occ:
+            for j in occ:
+                e += 2 * self.h2e[i, i, j, j]
+                e -= self.h2e[i, j, j, i]
+        return e
 
-    def hf_state(self) -> np.ndarray:
+    def hf_state_fci(self) -> np.ndarray:
         """
-        Computes the HF state of the system in the Fock basis (as groundstate)
+        Returns the HF state as a FCI vector (one-hot in the determinant basis).
         """
-        # following https://github.com/pyscf/pyscf/issues/2154
-        if not self.is_canonical_hf_basis():
-            raise RuntimeError(f"Not in canonical orbital basis")
-        assert self.num_elec % 2 == 0
-        num_det_alpha = int(scipy.special.binom(self.num_orb, self.num_elec // 2))
-        num_det_beta = int(scipy.special.binom(self.num_orb, self.num_elec // 2))
-        hf_det = np.zeros((num_det_alpha, num_det_beta))
-        hf_det[0, 0] = 1
+        if self.hf_state is None:
+            raise RuntimeError("hf_state is not set — not in canonical HF basis")
+        num_occ = self.num_elec // 2
+        occ_orbs = np.where(self.hf_state[:self.num_orb] == 1)[0]
+        hf_bitstring = int(sum(1 << int(i) for i in occ_orbs))
+        hf_det_idx = fci.cistring.str2addr(self.num_orb, num_occ, hf_bitstring)
+        num_det = int(scipy.special.binom(self.num_orb, num_occ))
+        hf_det = np.zeros((num_det, num_det))
+        hf_det[hf_det_idx, hf_det_idx] = 1
         return hf_det.flatten()
 
     def hf_overlap(self) -> float:
         """
         Computes overlap between the HF state and the ground state
         """
-        return np.abs(self.hf_state().T @ self.ground_state()) ** 2
+        return np.abs(self.hf_state_fci().T @ self.ground_state()) ** 2
 
     @staticmethod
     def from_pyscf(rhf, num_orb, num_elec):
