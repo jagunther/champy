@@ -58,7 +58,7 @@ class ElectronicStructure(Hamiltonian):
 
         occ_vec = np.zeros(2 * n, dtype=int)
         occ_vec[:num_occ] = 1
-        occ_vec[n:n + num_occ] = 1
+        occ_vec[n : n + num_occ] = 1
         return occ_vec
 
     def _compatible(self, other):
@@ -164,7 +164,9 @@ class ElectronicStructure(Hamiltonian):
         self.orb_symmetries = self.orb_symmetries[idx]
         if self.hf_state is not None:
             n = self.num_orb
-            self.hf_state = np.concatenate([self.hf_state[:n][idx], self.hf_state[n:][idx]])
+            self.hf_state = np.concatenate(
+                [self.hf_state[:n][idx], self.hf_state[n:][idx]]
+            )
 
     def to_sparse_matrix(self) -> scipy.sparse.csr_matrix:
         """
@@ -230,7 +232,7 @@ class ElectronicStructure(Hamiltonian):
         """
         if self.hf_state is None:
             raise RuntimeError("hf_state is not set — not in canonical HF basis")
-        occ = np.where(self.hf_state[:self.num_orb] == 1)[0]
+        occ = np.where(self.hf_state[: self.num_orb] == 1)[0]
         fock_op = copy.deepcopy(self.h1e)
         fock_op += 2 * np.sum(self.h2e[:, :, occ, occ], axis=-1)
         fock_op -= np.sum(self.h2e[:, occ, occ, :], axis=1)
@@ -268,7 +270,7 @@ class ElectronicStructure(Hamiltonian):
             raise RuntimeError("hf_state is not set — not in canonical HF basis")
         if not self.is_canonical_hf_basis():
             raise RuntimeError(f"Not in canonical orbital basis")
-        occ = np.where(self.hf_state[:self.num_orb] == 1)[0]
+        occ = np.where(self.hf_state[: self.num_orb] == 1)[0]
         e = self.constant
         e += 2 * np.sum(np.diag(self.h1e)[occ])
         for i in occ:
@@ -284,7 +286,7 @@ class ElectronicStructure(Hamiltonian):
         if self.hf_state is None:
             raise RuntimeError("hf_state is not set — not in canonical HF basis")
         num_occ = self.num_elec // 2
-        occ_orbs = np.where(self.hf_state[:self.num_orb] == 1)[0]
+        occ_orbs = np.where(self.hf_state[: self.num_orb] == 1)[0]
         hf_bitstring = int(sum(1 << int(i) for i in occ_orbs))
         hf_det_idx = fci.cistring.str2addr(self.num_orb, num_occ, hf_bitstring)
         num_det = int(scipy.special.binom(self.num_orb, num_occ))
@@ -413,14 +415,14 @@ class ElectronicStructure(Hamiltonian):
         Compute the sum of absolute values of coefficients of Hamiltonian expressed in terms of Paulis
         after fermion-to-qubit mapping.
         """
-        n = self.num_orb
+        return ElectronicStructure._sum_pauli_coeffs(self.h1e, self.h2e)
+
+    @staticmethod
+    def _sum_pauli_coeffs(h1e: np.ndarray, h2e: np.ndarray) -> float:
+        n = h1e.shape[0]
 
         # 1-electron part (vectorised)
-        curr = (
-            self.h1e
-            + np.einsum("pqrr->pq", self.h2e)
-            - 0.5 * np.einsum("prrq->pq", self.h2e)
-        )
+        curr = h1e + np.einsum("pqrr->pq", h2e) - 0.5 * np.einsum("prrq->pq", h2e)
         res = np.sum(np.abs(curr))
 
         # 2-electron antisymmetric part: sum |h2e[p,q,r,s] - h2e[p,s,r,q]| / 2
@@ -429,12 +431,31 @@ class ElectronicStructure(Hamiltonian):
         q_idx, s_idx = np.triu_indices(n, k=1)  # q < s
         p2, r2 = p_idx[:, None], r_idx[:, None]  # (n_pr, 1)
         q2, s2 = q_idx[None, :], s_idx[None, :]  # (1, n_qs)
-        vals = self.h2e[p2, q2, r2, s2]
-        vals = vals - self.h2e[p2, s2, r2, q2]
+        vals = h2e[p2, q2, r2, s2]
+        vals = vals - h2e[p2, s2, r2, q2]
         res += np.sum(np.abs(vals)) / 2
 
-        res += np.sum(np.abs(self.h2e)) / 4
+        res += np.sum(np.abs(h2e)) / 4
         return res
+
+    def shift_number_op(self, shift1e: float, shift2e: np.ndarray, inplace=False):
+        assert shift2e.shape == (self.num_orb, self.num_orb)
+
+        num_op = np.identity(self.num_orb)
+        h0_shift = self.h0 - shift1e * self.num_elec
+        h1e_shift = self.h1e + shift1e * num_op + (1 - self.num_elec) * shift2e
+        h2e_shift = (
+            self.h2e
+            + np.einsum("pq,rs->pqrs", num_op, shift2e)
+            + np.einsum("pq,rs->pqrs", shift2e, num_op)
+        )
+
+        if inplace:
+            self.h0 = h0_shift
+            self.h1e = h1e_shift
+            self.h2e = h2e_shift
+        else:
+            return h0_shift, h1e_shift, h2e_shift
 
     def rotate_orbitals(self, rotation: np.ndarray, inplace=False):
         """
@@ -469,26 +490,134 @@ class ElectronicStructure(Hamiltonian):
         else:
             return self.h0, h1e_rot, h2e_rot
 
-    def optimize_orbitals(self, method: str = "L-BFGS-B", perturbation: float = 1e-2, seed: int = None) -> scipy.optimize.OptimizeResult:
-        """Minimize sum_pauli_coeffs() over orbital rotations, updating h1e and h2e in-place.
+    def optimize_1norm(
+        self,
+        optimize_orbitals: bool = True,
+        optimize_shift: bool = True,
+        method: str = "L-BFGS-B",
+        perturbation: float = 1e-2,
+        seed: int = None,
+    ) -> scipy.optimize.OptimizeResult:
+        """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts,
+        updating h0, h1e, h2e in-place.
 
-        The optimization is over the Lie-algebra parameters x_kappa ∈ so(n),
-        starting from a small random perturbation around the identity (x_kappa = 0).
+        Both orbital rotations and shift2e are block-diagonal with respect to orb_symmetries:
+        orbitals from different symmetry sectors are not mixed.
 
-        :param method: scipy.optimize.minimize method, default 'L-BFGS-B'
-        :param perturbation: std of the Gaussian initial perturbation, default 1e-2
-        :param seed: random seed for reproducibility, default None
-        :return: OptimizeResult from scipy.optimize.minimize
+        Parameters
+        ----------
+        optimize_orbitals : bool
+        optimize_shift : bool
+        method : str
+            scipy.optimize.minimize method, default 'L-BFGS-B'.
+        perturbation : float
+            Std of the Gaussian initial perturbation applied to all parameters, default 1e-2.
+        seed : int or None
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        scipy.optimize.OptimizeResult
         """
-        n_params = self.num_orb * (self.num_orb - 1) // 2
-        rng = np.random.default_rng(seed)
-        x0 = rng.standard_normal(n_params) * perturbation
+        if not optimize_orbitals and not optimize_shift:
+            raise ValueError(
+                "At least one of optimize_orbitals or optimize_shift must be True"
+            )
 
-        def objective(x_kappa):
-            h0, h1e, h2e = self.rotate_orbitals(x_kappa.astype(float))
-            rotated = ElectronicStructure(h0, h1e, h2e, self.num_elec)
-            return rotated.sum_pauli_coeffs()
+        n = self.num_orb
+        num_op = np.identity(n)
+
+        # block structure from orb_symmetries
+        unique_labels = np.unique(self.orb_symmetries)
+        blocks = [np.where(self.orb_symmetries == lbl)[0] for lbl in unique_labels]
+
+        # κ: antisymmetric block-diagonal generator of orbital rotations O = exp(κ)
+        # free parameters are the lower-triangular entries within each symmetry block
+        block_tril_kappa = [(idx, np.tril_indices(len(idx), k=-1)) for idx in blocks]
+        n_kappa = sum(len(ri) for _, (ri, _) in block_tril_kappa)
+
+        def _unpack_kappa(x_kappa: np.ndarray) -> np.ndarray:
+            kappa = np.zeros((n, n))
+            offset = 0
+            for idx, (ri, ci) in block_tril_kappa:
+                nb_params = len(ri)
+                vals = x_kappa[offset : offset + nb_params]
+                offset += nb_params
+                block = np.zeros((len(idx), len(idx)))
+                block[ri, ci] = vals
+                block[ci, ri] = -vals
+                kappa[np.ix_(idx, idx)] = block
+            return kappa
+
+        # shift2e: symmetric block-diagonal matrix (ξ in BLISS notation)
+        # free parameters are the upper-triangular entries within each symmetry block
+        block_triu_shift2e = [(idx, np.triu_indices(len(idx))) for idx in blocks]
+        n_shift2e = sum(len(ri) for _, (ri, _) in block_triu_shift2e)
+
+        def _unpack_shift2e(x_shift2e: np.ndarray) -> np.ndarray:
+            shift2e = np.zeros((n, n))
+            offset = 0
+            for idx, (ri, ci) in block_triu_shift2e:
+                nb = len(idx)
+                nb_params = nb * (nb + 1) // 2
+                vals = x_shift2e[offset : offset + nb_params]
+                offset += nb_params
+                block = np.zeros((nb, nb))
+                block[ri, ci] = vals
+                block[ci, ri] = vals
+                shift2e[np.ix_(idx, idx)] = block
+            return shift2e
+
+        # initial parameter vector: all parameters start from a small random perturbation
+        rng = np.random.default_rng(seed)
+        x0_parts = []
+        if optimize_orbitals:
+            x0_parts.append(rng.standard_normal(n_kappa) * perturbation)
+        if optimize_shift:
+            # shift1e (scalar μ₁) + shift2e (block-diagonal ξ entries)
+            x0_parts.append(rng.standard_normal(1 + n_shift2e) * perturbation)
+        x0 = np.concatenate(x0_parts)
+
+        def objective(x: np.ndarray) -> float:
+            pos = 0
+            h1e_cur, h2e_cur = self.h1e, self.h2e
+
+            if optimize_orbitals:
+                kappa = _unpack_kappa(x[pos : pos + n_kappa].astype(float))
+                pos += n_kappa
+                o = scipy.linalg.expm(kappa)
+                h1e_cur = np.einsum("pq,pr,qs->rs", h1e_cur, o, o, optimize="optimal")
+                h2e_cur = np.einsum("pqrs,pt->tqrs", h2e_cur, o, optimize="optimal")
+                h2e_cur = np.einsum("tqrs,qu->turs", h2e_cur, o, optimize="optimal")
+                h2e_cur = np.einsum("turs,rv->tuvs", h2e_cur, o, optimize="optimal")
+                h2e_cur = np.einsum("tuvs,sw->tuvw", h2e_cur, o, optimize="optimal")
+
+            if optimize_shift:
+                shift1e = float(x[pos])
+                shift2e = _unpack_shift2e(x[pos + 1 : pos + 1 + n_shift2e])
+                pos += 1 + n_shift2e
+                h1e_cur = h1e_cur + shift1e * num_op + (1 - self.num_elec) * shift2e
+                h2e_cur = (
+                    h2e_cur
+                    + np.einsum("pq,rs->pqrs", num_op, shift2e)
+                    + np.einsum("pq,rs->pqrs", shift2e, num_op)
+                )
+
+            return ElectronicStructure._sum_pauli_coeffs(h1e_cur, h2e_cur)
 
         result = scipy.optimize.minimize(objective, x0, method=method)
-        self.rotate_orbitals(result.x.astype(float), inplace=True)
+
+        # apply optimal parameters in-place
+        x_opt = result.x
+        pos = 0
+        if optimize_orbitals:
+            kappa = _unpack_kappa(x_opt[pos : pos + n_kappa].astype(float))
+            o = scipy.linalg.expm(kappa)
+            self.rotate_orbitals(o, inplace=True)
+            pos += n_kappa
+        if optimize_shift:
+            shift1e = float(x_opt[pos])
+            shift2e = _unpack_shift2e(x_opt[pos + 1 : pos + 1 + n_shift2e])
+            self.shift_number_op(shift1e, shift2e, inplace=True)
+
         return result

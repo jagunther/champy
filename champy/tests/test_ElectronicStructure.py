@@ -192,6 +192,76 @@ def test_onv_basis(rhf_h2o):
     assert hamil.onv_basis()[idx_onv] == "000111000111"
 
 
+@pytest.mark.parametrize(
+    "hamil_random",
+    [(4, 4), (6, 4)],
+    indirect=True,
+)
+def test_shift_number_op_preserves_energy(hamil_random):
+    hamil = hamil_random
+    e_ref = hamil.ground_state_energy()
+    rng = np.random.default_rng(0)
+
+    shift1e = rng.standard_normal()
+    shift2e = rng.standard_normal((hamil.num_orb, hamil.num_orb))
+    shift2e = (shift2e + shift2e.T) / 2  # symmetrise
+
+    h0_s, h1e_s, h2e_s = hamil.shift_number_op(shift1e, shift2e, inplace=False)
+    hamil_shifted = ElectronicStructure(h0_s, h1e_s, h2e_s, hamil.num_elec)
+    assert abs(hamil_shifted.ground_state_energy() - e_ref) < 1e-9
+
+
+@pytest.mark.parametrize(
+    "hamil_random",
+    [(4, 4)],
+    indirect=True,
+)
+def test_shift_number_op_inplace(hamil_random):
+    import copy
+
+    hamil = copy.deepcopy(hamil_random)
+    e_ref = hamil.ground_state_energy()
+    rng = np.random.default_rng(1)
+
+    shift1e = rng.standard_normal()
+    shift2e = rng.standard_normal((hamil.num_orb, hamil.num_orb))
+    shift2e = (shift2e + shift2e.T) / 2
+
+    result = hamil.shift_number_op(shift1e, shift2e, inplace=True)
+
+    assert result is None  # inplace returns nothing
+    assert abs(hamil.ground_state_energy() - e_ref) < 1e-9
+
+
+@pytest.mark.parametrize(
+    "hamil_random, optimize_orbitals, optimize_shift",
+    [
+        ((4, 4), True, False),
+        ((4, 4), False, True),
+        ((4, 4), True, True),
+        ((6, 4), True, True),
+    ],
+    indirect=["hamil_random"],
+)
+def test_optimize_1norm(hamil_random, optimize_orbitals, optimize_shift):
+    import copy
+
+    hamil = copy.deepcopy(hamil_random)
+    e_ref = hamil.ground_state_energy()
+    lam_before = hamil.sum_pauli_coeffs()
+
+    hamil.optimize_1norm(
+        optimize_orbitals=optimize_orbitals,
+        optimize_shift=optimize_shift,
+        seed=0,
+    )
+
+    # ground state energy must be preserved
+    assert abs(hamil.ground_state_energy() - e_ref) < 1e-8
+    # 1-norm must not increase
+    assert hamil.sum_pauli_coeffs() <= lam_before + 1e-6
+
+
 def test_rotate_orbitals_hamiltonian(rhf_h2o):
     norb = 6
     hamil = ElectronicStructure.from_pyscf(rhf_h2o, num_orb=norb, num_elec=norb)

@@ -36,13 +36,23 @@ elstruc.symmetry_ordering()
 print(f"Orb symmetries (after ordering)  : {elstruc.orb_symmetries}")
 elstruc.plot_orbital_interaction_graph()
 
-# ── 3. Orbital optimisation ──────────────────────────────────────────────────
+# ── 3. 1-norm optimisation ───────────────────────────────────────────────────
+import copy
+
 spc_before = elstruc.sum_pauli_coeffs()
-result = elstruc.optimize_orbitals()
-spc_after = elstruc.sum_pauli_coeffs()
 print(f"\nsum_pauli_coeffs before optimisation : {spc_before:.6f}")
-print(f"sum_pauli_coeffs after  optimisation : {spc_after:.6f}")
-print(f"Optimisation converged               : {result.success}  ({result.message})")
+
+es_orb = copy.deepcopy(elstruc)
+result_orb = es_orb.optimize_1norm(optimize_orbitals=True, optimize_shift=False, seed=0)
+print(f"sum_pauli_coeffs after orbital-only  : {es_orb.sum_pauli_coeffs():.6f}  (converged: {result_orb.success})")
+
+es_shift = copy.deepcopy(elstruc)
+result_shift = es_shift.optimize_1norm(optimize_orbitals=False, optimize_shift=True, seed=0)
+print(f"sum_pauli_coeffs after shift-only    : {es_shift.sum_pauli_coeffs():.6f}  (converged: {result_shift.success})")
+
+es_both = copy.deepcopy(elstruc)
+result_both = es_both.optimize_1norm(optimize_orbitals=True, optimize_shift=True, seed=0)
+print(f"sum_pauli_coeffs after combined      : {es_both.sum_pauli_coeffs():.6f}  (converged: {result_both.success})")
 
 # ── 4. Ground-state energy (FCI via PySCF) ───────────────────────────────────
 e_gs = elstruc.ground_state_energy()
