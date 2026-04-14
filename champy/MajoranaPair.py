@@ -151,12 +151,58 @@ class MajoranaPair(Hamiltonian):
         weights += np.abs(self.f2e_sameop_diffspin)[:, :, np.newaxis]
         return weights
 
-    def plot_orbital_graph(self) -> None:
+    def jw_cost(self, perm: np.ndarray) -> float:
+        """Cost of a JW ordering given as a permutation of orbital indices.
+
+        cost = Σ_{p<q} w[p,q] * |pos[p] - pos[q]|
+
+        where pos[p] is the position of orbital p in the JW string.
+        """
+        w = self.majoranapair_weights()[:, :, 0]
+        n = len(perm)
+        pos = np.empty(n, dtype=int)
+        pos[perm] = np.arange(n)
+        p_idx, q_idx = np.triu_indices(n, k=1)
+        return float(np.sum(w[p_idx, q_idx] * np.abs(pos[p_idx] - pos[q_idx])))
+
+    def optimize_jw_ordering(self) -> np.ndarray:
+        """Find a low-cost Jordan-Wigner ordering via spectral ordering + local swap refinement.
+
+        Returns a permutation array π such that orbital π[i] is placed at position i
+        in the JW string.
+        """
+        w = self.majoranapair_weights()[:, :, 0]
+        n = self.num_orb
+
+        # ── 1. Spectral ordering (Fiedler vector of weighted Laplacian) ──────
+        degree = w.sum(axis=1)
+        L = np.diag(degree) - w
+        _, eigvecs = np.linalg.eigh(L)
+        fiedler = eigvecs[:, 1]          # 2nd smallest eigenvector
+        perm = np.argsort(fiedler)       # orbital index → JW position
+
+        # ── 2. Local swap refinement ─────────────────────────────────────────
+        improved = True
+        while improved:
+            improved = False
+            for i in range(n - 1):
+                swapped = perm.copy()
+                swapped[i], swapped[i + 1] = swapped[i + 1], swapped[i]
+                if self.jw_cost(swapped) < self.jw_cost(perm):
+                    perm = swapped
+                    improved = True
+
+        return perm
+
+    def plot_orbital_graph(self, optimize_jw: bool = False) -> None:
         """Plot the orbital graph for the spin-↑ sector using a spring layout.
 
         Edge weights drive the spring forces: heavier edges pull nodes closer.
         Γ_pp → vertex p  (color proportional to weight)
         Γ_pq → undirected edge  (color proportional to weight)
+
+        :param optimize_jw: if True, compute and display the optimal JW ordering
+                            instead of the default 0,1,...,n-1.
         """
         import networkx as nx
         import matplotlib.colors as mcolors
@@ -170,66 +216,71 @@ class MajoranaPair(Hamiltonian):
         nonzero = w[w > 0]
         norm = mcolors.LogNorm(vmin=nonzero.min(), vmax=w.max())
 
-        # Build graph with edge weights
+        # Build graph with edge weights and compute layout
         G = nx.Graph()
         G.add_nodes_from(range(n))
         for p in range(n):
             for q in range(p + 1, n):
                 if w[p, q] > 1e-6 * w.max():
                     G.add_edge(p, q, weight=w[p, q])
-
         pos = nx.spring_layout(G, weight="weight", seed=42)
 
-        fig, ax = plt.subplots(figsize=(6, 6))
-        fig.subplots_adjust(right=0.78)
+        # JW orderings to display
+        jw_orderings = [("JW default", np.arange(n), "red")]
+        if optimize_jw:
+            jw_orderings.append(("JW optimized", self.optimize_jw_ordering(), "green"))
 
-        # Edges
+        n_cols = 1 + len(jw_orderings)
+        fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
+        fig.subplots_adjust(right=0.88)
+
+        def _draw_vertices(ax):
+            for p in range(n):
+                circle = plt.Circle(
+                    pos[p], 0.07,
+                    facecolor=cmap(norm(diag_vals[p])),
+                    edgecolor="black", linewidth=1.5, zorder=3,
+                )
+                ax.add_patch(circle)
+                r, g, b, _ = cmap(norm(diag_vals[p]))
+                luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                ax.text(
+                    *pos[p], str(p), ha="center", va="center",
+                    fontsize=13, fontweight="bold", zorder=4,
+                    color="white" if luminance < 0.5 else "black",
+                )
+            ax.set_aspect("equal")
+            ax.axis("off")
+            ax.autoscale_view()
+
+        # ── Left: orbital interaction graph ──────────────────────────────────
+        ax = axes[0]
         for p, q in G.edges():
-            val = w[p, q]
             xs = [pos[p][0], pos[q][0]]
             ys = [pos[p][1], pos[q][1]]
-            ax.plot(xs, ys, color=cmap(norm(val)), lw=2, zorder=1)
+            ax.plot(xs, ys, color=cmap(norm(w[p, q])), lw=2, zorder=1)
+        _draw_vertices(ax)
+        ax.set_title(
+            "Orbital graph (spin-↑)\n"
+            r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
+            fontsize=10,
+        )
 
-        # Vertices
-        NODE_RADIUS = 0.05
-        for p in range(n):
-            circle = plt.Circle(
-                pos[p],
-                NODE_RADIUS,
-                facecolor=cmap(norm(diag_vals[p])),
-                edgecolor="black",
-                linewidth=1.5,
-                zorder=3,
-                transform=ax.transData,
-            )
-            ax.add_patch(circle)
-            r, g, b, _ = cmap(norm(diag_vals[p]))
-            luminance = 0.299 * r + 0.587 * g + 0.114 * b
-            text_color = "white" if luminance < 0.5 else "black"
-            ax.text(
-                *pos[p],
-                str(p),
-                ha="center",
-                va="center",
-                fontsize=13,
-                fontweight="bold",
-                color=text_color,
-                zorder=4,
-            )
+        # ── Right: one subplot per JW ordering ───────────────────────────────
+        for ax, (title, perm, color) in zip(axes[1:], jw_orderings):
+            cost = self.jw_cost(perm)
+            for i in range(n - 1):
+                xs = [pos[perm[i]][0], pos[perm[i + 1]][0]]
+                ys = [pos[perm[i]][1], pos[perm[i + 1]][1]]
+                ax.plot(xs, ys, color=color, lw=2, zorder=1)
+            _draw_vertices(ax)
+            ax.set_title(f"{title}\ncost = {cost:.3f}", fontsize=10)
 
-        # Colorbar
-        cax = fig.add_axes([0.82, 0.15, 0.03, 0.7])
+        # Shared colorbar
+        cax = fig.add_axes([0.91, 0.15, 0.02, 0.7])
         mcolorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation="vertical")
         cax.set_title(r"$w$", fontsize=10)
 
-        ax.set_aspect("equal")
-        ax.axis("off")
-        ax.autoscale_view()
-        ax.set_title(
-            "Orbital graph (spin-↑ sector)\n"
-            r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
-            fontsize=11,
-        )
         plt.show()
 
     def jordan_wigner(self) -> PauliHamiltonian:

@@ -17,7 +17,7 @@ where
 The one-electron and two-electron integrals are defined by
 $$
 h_{pq} = \langle p \,|\, \hat{h} \,|\, q \rangle
-= \int \phi_p^*(\mathbf{r})\left[-\tfrac{1}{2}\nabla^2 - \sum_A \frac{Z_A}{|\mathbf{r}-\mathbf{R}_A|}\right]\phi_q(\mathbf{r})\mathrm{d}\mathbf{r}.
+= \int \phi_p^*(\mathbf{r})\left[-\frac{1}{2}\nabla^2 - \sum_A \frac{Z_A}{|\mathbf{r}-\mathbf{R}_A|}\right]\phi_q(\mathbf{r})\mathrm{d}\mathbf{r}.
 $$
 and
 $$
@@ -48,9 +48,11 @@ The Hamiltonian is fully defined by the coefficients $f_0, f_{pq}, f_{pqrs}$ and
 
 For most purposes, a Majorana pair Hamiltonian is constructed by mapping an electronic structure Hamiltonian to a Majorana pair Hamiltonian with:
 $$
-f_0 = \sum_p h_{pp} + \frac12\sum_{pr}(g_{pprr} - g_{prrp}) \\
-f_{pq} = \frac12\left(h_{pq} + \sum_r g_{pqrr} - \frac12\sum_r g_{prrq} \right)\\
-f_{pqrs} = \frac18 g_{pqrs}.
+\begin{align}
+f_0 &= \sum_p h_{pp} + \frac{1}{2}\sum_{pr}(g_{pprr} - g_{prrp}) \\
+f_{pq} &= \frac{1}{2}\left(h_{pq} + \sum_r g_{pqrr} - \frac{1}{2}\sum_r g_{prrq} \right)\\
+f_{pqrs} &= \frac{1}{8} g_{pqrs}
+\end{align}
 $$
 Note that the 2-electron part of the Majorana pair Hamiltonian above contains duplicate terms. 
 Internally, the summation over indices $p,q,r,s$ is restricted to contain a term only once.
