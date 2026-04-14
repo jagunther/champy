@@ -10,14 +10,17 @@ from pyscf import gto, scf
 from champy.ElectronicStructure import ElectronicStructure
 
 # ── 1. Build ElectronicStructure from H2O / cc-pVDZ ─────────────────────────
-NUM_ORB  = 6
+NUM_ORB = 6
 NUM_ELEC = 6
 
-mol = gto.M(atom="""
+mol = gto.M(
+    atom="""
 O 0. 0. 0.
 H 0.757 0.586 0.
 H -.757 0.586 0.
-""", basis="ccpvdz")
+""",
+    basis="ccpvdz",
+)
 rhf = scf.RHF(mol).newton()
 rhf.run()
 
@@ -44,15 +47,25 @@ print(f"\nsum_pauli_coeffs before optimisation : {spc_before:.6f}")
 
 es_orb = copy.deepcopy(elstruc)
 result_orb = es_orb.optimize_1norm(optimize_orbitals=True, optimize_shift=False, seed=0)
-print(f"sum_pauli_coeffs after orbital-only  : {es_orb.sum_pauli_coeffs():.6f}  (converged: {result_orb.success})")
+print(
+    f"sum_pauli_coeffs after orbital-only  : {es_orb.sum_pauli_coeffs():.6f}  (converged: {result_orb.success})"
+)
 
 es_shift = copy.deepcopy(elstruc)
-result_shift = es_shift.optimize_1norm(optimize_orbitals=False, optimize_shift=True, seed=0)
-print(f"sum_pauli_coeffs after shift-only    : {es_shift.sum_pauli_coeffs():.6f}  (converged: {result_shift.success})")
+result_shift = es_shift.optimize_1norm(
+    optimize_orbitals=False, optimize_shift=True, seed=0
+)
+print(
+    f"sum_pauli_coeffs after shift-only    : {es_shift.sum_pauli_coeffs():.6f}  (converged: {result_shift.success})"
+)
 
 es_both = copy.deepcopy(elstruc)
-result_both = es_both.optimize_1norm(optimize_orbitals=True, optimize_shift=True, seed=0)
-print(f"sum_pauli_coeffs after combined      : {es_both.sum_pauli_coeffs():.6f}  (converged: {result_both.success})")
+result_both = es_both.optimize_1norm(
+    optimize_orbitals=True, optimize_shift=True, seed=0
+)
+print(
+    f"sum_pauli_coeffs after combined      : {es_both.sum_pauli_coeffs():.6f}  (converged: {result_both.success})"
+)
 
 # ── 4. Ground-state energy (FCI via PySCF) ───────────────────────────────────
 e_gs = elstruc.ground_state_energy()
@@ -88,14 +101,23 @@ print(f"  Constant : {pauli_hamil.constant:.6f}")
 import scipy.sparse.linalg
 
 spec_fci = (
-    np.sort(scipy.sparse.linalg.eigsh(
-        scipy.sparse.csr_matrix(elstruc.to_sparse_matrix()), k=25, which="SA", return_eigenvectors=False
-    )) + elstruc.constant
+    np.sort(
+        scipy.sparse.linalg.eigsh(
+            scipy.sparse.csr_matrix(elstruc.to_sparse_matrix()),
+            k=25,
+            which="SA",
+            return_eigenvectors=False,
+        )
+    )
+    + elstruc.constant
 )
 spec_pauli = (
-    np.sort(scipy.sparse.linalg.eigsh(
-        pauli_hamil.to_sparse_matrix(), k=25, which="SA", return_eigenvectors=False
-    )) + pauli_hamil.constant
+    np.sort(
+        scipy.sparse.linalg.eigsh(
+            pauli_hamil.to_sparse_matrix(), k=25, which="SA", return_eigenvectors=False
+        )
+    )
+    + pauli_hamil.constant
 )
 print(f"\nLowest 4 FCI eigenvalues   : {spec_fci[:4]}")
 print(f"Lowest 4 Pauli eigenvalues : {spec_pauli[:4]}")
