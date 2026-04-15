@@ -194,6 +194,28 @@ class MajoranaPair(Hamiltonian):
 
         return perm
 
+    def apply_jw_ordering(self, perm: np.ndarray = None, inplace: bool = False) -> "MajoranaPair | None":
+        """Permute orbital indices according to a JW ordering.
+
+        :param perm: permutation array where perm[i] is the orbital placed at position i.
+                     If None, calls optimize_jw_ordering() to find the optimal permutation.
+        :param inplace: if True, modify all tensors in-place and return None;
+                        if False, return a new MajoranaPair.
+        """
+        if perm is None:
+            perm = self.optimize_jw_ordering()
+        ix = np.ix_(perm, perm)
+        ix4 = np.ix_(perm, perm, perm, perm)
+        if inplace:
+            self.h1e = self.h1e[ix]
+            self.h2e = self.h2e[ix4]
+            self.f1e = self.f1e[ix]
+            self.f2e_diffopp_samespin = self.f2e_diffopp_samespin[ix4]
+            self.f2e_diffop_diffspin = self.f2e_diffop_diffspin[ix4]
+            self.f2e_sameop_diffspin = self.f2e_sameop_diffspin[ix]
+            return None
+        return MajoranaPair(h0=0, h1e=self.h1e[ix], h2e=self.h2e[ix4])
+
     def plot_orbital_graph(self, optimize_jw: bool = False) -> None:
         """Plot the orbital graph for the spin-↑ sector using a spring layout.
 
