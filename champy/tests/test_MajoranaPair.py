@@ -39,3 +39,12 @@ def test_jordan_wigner(hamil_random):
     pauli_hamil = elstruc.to_MajoranaPair().jordan_wigner()
     valid, error = _f2q_valid(elstruc=elstruc, pauli_hamil=pauli_hamil)
     assert valid
+
+
+@pytest.mark.parametrize("hamil_random", [(4, 4)], indirect=True)
+def test_jw_matrix(hamil_random):
+    """jordan_wigner() via jw_matrix(): FCI spectrum is subset of Pauli spectrum."""
+    elstruc = hamil_random
+    pauli_hamil = elstruc.to_MajoranaPair().jordan_wigner()
+    valid, error = _f2q_valid(elstruc=elstruc, pauli_hamil=pauli_hamil)
+    assert valid
