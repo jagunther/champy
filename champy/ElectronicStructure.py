@@ -490,15 +490,16 @@ class ElectronicStructure(Hamiltonian):
         else:
             return self.h0, h1e_rot, h2e_rot
 
-    def optimize_1norm(
+    def optimize(
         self,
+        objective_fn,
         optimize_orbitals: bool = True,
         optimize_shift: bool = True,
         method: str = "L-BFGS-B",
         perturbation: float = 1e-2,
         seed: int = None,
     ) -> scipy.optimize.OptimizeResult:
-        """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts,
+        """Minimize a cost function over orbital rotations and/or number-operator shifts,
         updating h0, h1e, h2e in-place.
 
         Both orbital rotations and shift2e are block-diagonal with respect to orb_symmetries:
@@ -506,6 +507,8 @@ class ElectronicStructure(Hamiltonian):
 
         Parameters
         ----------
+        objective_fn : callable(h1e, h2e) -> float
+            Cost function to minimize.
         optimize_orbitals : bool
         optimize_shift : bool
         method : str
@@ -578,7 +581,7 @@ class ElectronicStructure(Hamiltonian):
             x0_parts.append(rng.standard_normal(1 + n_shift2e) * perturbation)
         x0 = np.concatenate(x0_parts)
 
-        def objective(x: np.ndarray) -> float:
+        def _objective(x: np.ndarray) -> float:
             pos = 0
             h1e_cur, h2e_cur = self.h1e, self.h2e
 
@@ -603,9 +606,9 @@ class ElectronicStructure(Hamiltonian):
                     + np.einsum("pq,rs->pqrs", shift2e, num_op)
                 )
 
-            return ElectronicStructure._sum_pauli_coeffs(h1e_cur, h2e_cur)
+            return objective_fn(h1e_cur, h2e_cur)
 
-        result = scipy.optimize.minimize(objective, x0, method=method)
+        result = scipy.optimize.minimize(_objective, x0, method=method)
 
         # apply optimal parameters in-place
         x_opt = result.x
@@ -621,3 +624,23 @@ class ElectronicStructure(Hamiltonian):
             self.shift_number_op(shift1e, shift2e, inplace=True)
 
         return result
+
+    def optimize_1norm(
+        self,
+        optimize_orbitals: bool = True,
+        optimize_shift: bool = True,
+        method: str = "L-BFGS-B",
+        perturbation: float = 1e-2,
+        seed: int = None,
+    ) -> scipy.optimize.OptimizeResult:
+        """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts.
+        Calls optimize() with ElectronicStructure._sum_pauli_coeffs as the objective.
+        """
+        return self.optimize(
+            ElectronicStructure._sum_pauli_coeffs,
+            optimize_orbitals=optimize_orbitals,
+            optimize_shift=optimize_shift,
+            method=method,
+            perturbation=perturbation,
+            seed=seed,
+        )
