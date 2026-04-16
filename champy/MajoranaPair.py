@@ -21,40 +21,60 @@ class MajoranaPair(Hamiltonian):
         self.h1e = h1e
         self.h2e = h2e
 
-        # constant: h0 + trace(h1e) + one-body part from h2e
-        self._constant = float(
+        (
+            self._constant,
+            self.f1e,
+            self.f2e_diffopp_samespin,
+            self.f2e_diffop_diffspin,
+            self.f2e_sameop_diffspin,
+        ) = MajoranaPair._majorana_coeffs(h0, h1e, h2e)
+
+        # lazy cache for jw_matrix()
+        self._jw_M = None
+        self._jw_pauli_labels = None
+        self._jw_col_labels = None
+
+    @staticmethod
+    def _majorana_coeffs(h0: float, h1e: np.ndarray, h2e: np.ndarray) -> tuple:
+        """Compute the constant and Majorana coefficient tensors from h0, h1e, h2e.
+
+        Returns
+        -------
+        constant : float
+        f1e : ndarray, shape (n, n)
+        f2e_diffopp_samespin : ndarray, shape (n, n, n, n)
+        f2e_diffop_diffspin : ndarray, shape (n, n, n, n)
+        f2e_sameop_diffspin : ndarray, shape (n, n)
+        """
+        n = h1e.shape[0]
+        p, q, r, s = np.ogrid[:n, :n, :n, :n]
+
+        constant = float(
             h0
             + np.trace(h1e)
             + 0.5 * np.einsum("pprr->", h2e)
             - 0.25 * np.einsum("prrp->", h2e)
         )
 
-        # 1-el Majorana coefficients: Γ_pq,σ
-        self.f1e = (
-            h1e
-            + np.einsum("pqrr->pq", self.h2e)
-            - 0.5 * np.einsum("prrq->pq", self.h2e)
-        ) / 2
+        f1e = (h1e + np.einsum("pqrr->pq", h2e) - 0.5 * np.einsum("prrq->pq", h2e)) / 2
 
-        # 2-el Majorana coefficients, diff operators, same spin: Γ_pq,σ Γ_rs,σ
-        n = self.num_orb
-        p, q, r, s = np.ogrid[:n, :n, :n, :n]
-        self.f2e_diffopp_samespin = (
+        f2e_diffopp_samespin = (
             np.where((p > r) & (q < s), h2e - np.swapaxes(h2e, 1, 3), 0) / 4
         )
 
-        # 2-el Majorana coefficients, diff operators, diff spin: Γ_pq,σ Γ_rs,τ
-        self.f2e_diffop_diffspin = np.where((p > r) & (q <= s), h2e, 0) / 4
-        self.f2e_diffop_diffspin += np.where((p >= r) & (q > s), h2e, 0) / 4
+        f2e_diffop_diffspin = np.where((p > r) & (q <= s), h2e, 0) / 4
+        f2e_diffop_diffspin += np.where((p >= r) & (q > s), h2e, 0) / 4
 
-        # 2-el Majorana coefficients, same operators, diff spin: Γ_pq,σ Γ_pq,τ
-        self.f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0) / 4
-        self.f2e_sameop_diffspin = np.einsum("pqpq->pq", self.f2e_sameop_diffspin)
+        f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0) / 4
+        f2e_sameop_diffspin = np.einsum("pqpq->pq", f2e_sameop_diffspin)
 
-        # lazy cache for jw_matrix()
-        self._jw_M = None
-        self._jw_pauli_labels = None
-        self._jw_col_labels = None
+        return (
+            constant,
+            f1e,
+            f2e_diffopp_samespin,
+            f2e_diffop_diffspin,
+            f2e_sameop_diffspin,
+        )
 
     def _compatible(self, other):
         assert self.num_orb == other.num_orb
