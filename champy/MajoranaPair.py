@@ -265,6 +265,9 @@ class MajoranaPair(Hamiltonian):
             self.f2e_diffopp_samespin = self.f2e_diffopp_samespin[ix4]
             self.f2e_diffop_diffspin = self.f2e_diffop_diffspin[ix4]
             self.f2e_sameop_diffspin = self.f2e_sameop_diffspin[ix]
+            self._jw_M = None
+            self._jw_pauli_labels = None
+            self._jw_col_labels = None
             return None
         return MajoranaPair(h0=0, h1e=self.h1e[ix], h2e=self.h2e[ix4])
 
