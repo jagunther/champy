@@ -1,8 +1,29 @@
 from champy.Hamiltonian import Hamiltonian
 from champy.PauliHamiltonian import PauliHamiltonian
+import functools
 import numpy as np
 import scipy.sparse
 import matplotlib.pyplot as plt
+
+
+@functools.lru_cache(maxsize=16)
+def _majorana_masks(n: int):
+    """Boolean index masks for _majorana_coeffs, cached by n.
+
+    Both masks depend only on the system size n (never on h1e/h2e), so they
+    are computed once per unique n and reused across calls — or baked in as
+    compile-time constants when the function is run under jax.jit.
+    """
+    idx = np.arange(n)
+    p = idx[:, None, None, None]
+    q = idx[None, :, None, None]
+    r = idx[None, None, :, None]
+    s = idx[None, None, None, :]
+    # (p>r)&(q<s): diff operators, same spin
+    mask_ss = (p > r) & (q < s)
+    # (p>r)|(p==r and q>s): diff operators, diff spin (simplified from two conditions)
+    mask_ds = (p > r) | ((p == r) & (q > s))
+    return mask_ss, mask_ds
 
 
 class MajoranaPair(Hamiltonian):
@@ -35,38 +56,41 @@ class MajoranaPair(Hamiltonian):
         self._jw_col_labels = None
 
     @staticmethod
-    def _majorana_coeffs(h0: float, h1e: np.ndarray, h2e: np.ndarray) -> tuple:
+    @functools.partial(__import__("jax").jit, static_argnums=())
+    def _majorana_coeffs(h0: float, h1e, h2e) -> tuple:
         """Compute the constant and Majorana coefficient tensors from h0, h1e, h2e.
+
+        JIT-compiled and JAX-differentiable. Boolean masks are cached by n via
+        _majorana_masks() and treated as compile-time constants under jax.jit.
 
         Returns
         -------
-        constant : float
-        f1e : ndarray, shape (n, n)
-        f2e_diffopp_samespin : ndarray, shape (n, n, n, n)
-        f2e_diffop_diffspin : ndarray, shape (n, n, n, n)
-        f2e_sameop_diffspin : ndarray, shape (n, n)
+        constant : scalar
+        f1e : array, shape (n, n)
+        f2e_diffopp_samespin : array, shape (n, n, n, n)
+        f2e_diffop_diffspin : array, shape (n, n, n, n)
+        f2e_sameop_diffspin : array, shape (n, n)
         """
+        import jax.numpy as jnp
+
         n = h1e.shape[0]
-        p, q, r, s = np.ogrid[:n, :n, :n, :n]
+        mask_ss, mask_ds = _majorana_masks(n)
 
-        constant = float(
+        constant = (
             h0
-            + np.trace(h1e)
-            + 0.5 * np.einsum("pprr->", h2e)
-            - 0.25 * np.einsum("prrp->", h2e)
+            + jnp.trace(h1e)
+            + 0.5 * jnp.einsum("pprr->", h2e)
+            - 0.25 * jnp.einsum("prrp->", h2e)
         )
 
-        f1e = (h1e + np.einsum("pqrr->pq", h2e) - 0.5 * np.einsum("prrq->pq", h2e)) / 2
+        f1e = (
+            h1e + jnp.einsum("pqrr->pq", h2e) - 0.5 * jnp.einsum("prrq->pq", h2e)
+        ) / 2
+        f2e_diffopp_samespin = jnp.where(mask_ss, h2e - jnp.swapaxes(h2e, 1, 3), 0) / 4
+        f2e_diffop_diffspin = jnp.where(mask_ds, h2e, 0) / 4
 
-        f2e_diffopp_samespin = (
-            np.where((p > r) & (q < s), h2e - np.swapaxes(h2e, 1, 3), 0) / 4
-        )
-
-        f2e_diffop_diffspin = np.where((p > r) & (q <= s), h2e, 0) / 4
-        f2e_diffop_diffspin += np.where((p >= r) & (q > s), h2e, 0) / 4
-
-        f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0) / 4
-        f2e_sameop_diffspin = np.einsum("pqpq->pq", f2e_sameop_diffspin)
+        # einsum("pqpq->pq", A) picks A[p,q,p,q] without summation — the where is redundant
+        f2e_sameop_diffspin = jnp.einsum("pqpq->pq", h2e) / 4
 
         return (
             constant,
