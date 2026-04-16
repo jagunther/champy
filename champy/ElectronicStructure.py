@@ -498,6 +498,7 @@ class ElectronicStructure(Hamiltonian):
         method: str = "L-BFGS-B",
         perturbation: float = 1e-2,
         seed: int = None,
+        inplace: bool = True,
     ) -> scipy.optimize.OptimizeResult:
         """Minimize a cost function over orbital rotations and/or number-operator shifts,
         updating h0, h1e, h2e in-place.
@@ -517,6 +518,9 @@ class ElectronicStructure(Hamiltonian):
             Std of the Gaussian initial perturbation applied to all parameters, default 1e-2.
         seed : int or None
             Random seed for reproducibility.
+        inplace : bool
+            If True (default), apply the optimal parameters to h0, h1e, h2e in-place.
+            If False, only return the OptimizeResult without modifying the instance.
 
         Returns
         -------
@@ -610,18 +614,18 @@ class ElectronicStructure(Hamiltonian):
 
         result = scipy.optimize.minimize(_objective, x0, method=method)
 
-        # apply optimal parameters in-place
-        x_opt = result.x
-        pos = 0
-        if optimize_orbitals:
-            kappa = _unpack_kappa(x_opt[pos : pos + n_kappa].astype(float))
-            o = scipy.linalg.expm(kappa)
-            self.rotate_orbitals(o, inplace=True)
-            pos += n_kappa
-        if optimize_shift:
-            shift1e = float(x_opt[pos])
-            shift2e = _unpack_shift2e(x_opt[pos + 1 : pos + 1 + n_shift2e])
-            self.shift_number_op(shift1e, shift2e, inplace=True)
+        if inplace:
+            x_opt = result.x
+            pos = 0
+            if optimize_orbitals:
+                kappa = _unpack_kappa(x_opt[pos : pos + n_kappa].astype(float))
+                o = scipy.linalg.expm(kappa)
+                self.rotate_orbitals(o, inplace=True)
+                pos += n_kappa
+            if optimize_shift:
+                shift1e = float(x_opt[pos])
+                shift2e = _unpack_shift2e(x_opt[pos + 1 : pos + 1 + n_shift2e])
+                self.shift_number_op(shift1e, shift2e, inplace=True)
 
         return result
 
@@ -632,6 +636,7 @@ class ElectronicStructure(Hamiltonian):
         method: str = "L-BFGS-B",
         perturbation: float = 1e-2,
         seed: int = None,
+        inplace: bool = True,
     ) -> scipy.optimize.OptimizeResult:
         """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts.
         Calls optimize() with ElectronicStructure._sum_pauli_coeffs as the objective.
@@ -643,4 +648,5 @@ class ElectronicStructure(Hamiltonian):
             method=method,
             perturbation=perturbation,
             seed=seed,
+            inplace=inplace,
         )
