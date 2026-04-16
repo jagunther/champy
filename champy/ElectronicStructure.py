@@ -499,9 +499,10 @@ class ElectronicStructure(Hamiltonian):
         perturbation: float = 1e-2,
         seed: int = None,
         inplace: bool = True,
+        basinhopping: bool = False,
+        basinhopping_kwargs: dict = None,
     ) -> scipy.optimize.OptimizeResult:
-        """Minimize a cost function over orbital rotations and/or number-operator shifts,
-        updating h0, h1e, h2e in-place.
+        """Minimize a cost function over orbital rotations and/or number-operator shifts.
 
         Both orbital rotations and shift2e are block-diagonal with respect to orb_symmetries:
         orbitals from different symmetry sectors are not mixed.
@@ -513,7 +514,7 @@ class ElectronicStructure(Hamiltonian):
         optimize_orbitals : bool
         optimize_shift : bool
         method : str
-            scipy.optimize.minimize method, default 'L-BFGS-B'.
+            Local minimizer method passed to scipy.optimize.minimize, default 'L-BFGS-B'.
         perturbation : float
             Std of the Gaussian initial perturbation applied to all parameters, default 1e-2.
         seed : int or None
@@ -521,6 +522,12 @@ class ElectronicStructure(Hamiltonian):
         inplace : bool
             If True (default), apply the optimal parameters to h0, h1e, h2e in-place.
             If False, only return the OptimizeResult without modifying the instance.
+        basinhopping : bool
+            If True, wrap the local minimizer with scipy.optimize.basinhopping for
+            global optimization. Default False.
+        basinhopping_kwargs : dict or None
+            Extra keyword arguments forwarded to scipy.optimize.basinhopping
+            (e.g. niter, T, stepsize). Ignored when basinhopping=False.
 
         Returns
         -------
@@ -612,7 +619,17 @@ class ElectronicStructure(Hamiltonian):
 
             return objective_fn(h1e_cur, h2e_cur)
 
-        result = scipy.optimize.minimize(_objective, x0, method=method)
+        minimizer_kwargs = {"method": method}
+        if basinhopping:
+            bh_kwargs = basinhopping_kwargs or {}
+            result = scipy.optimize.basinhopping(
+                _objective, x0,
+                minimizer_kwargs=minimizer_kwargs,
+                seed=seed,
+                **bh_kwargs,
+            )
+        else:
+            result = scipy.optimize.minimize(_objective, x0, **minimizer_kwargs)
 
         if inplace:
             x_opt = result.x
@@ -637,6 +654,8 @@ class ElectronicStructure(Hamiltonian):
         perturbation: float = 1e-2,
         seed: int = None,
         inplace: bool = True,
+        basinhopping: bool = False,
+        basinhopping_kwargs: dict = None,
     ) -> scipy.optimize.OptimizeResult:
         """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts.
         Calls optimize() with ElectronicStructure._sum_pauli_coeffs as the objective.
@@ -649,4 +668,6 @@ class ElectronicStructure(Hamiltonian):
             perturbation=perturbation,
             seed=seed,
             inplace=inplace,
+            basinhopping=basinhopping,
+            basinhopping_kwargs=basinhopping_kwargs,
         )
