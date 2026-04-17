@@ -10,8 +10,7 @@ import scipy
 import scipy.optimize
 import scipy.sparse
 import scipy.sparse.csgraph
-from numba import jit
-import copy
+import scipy.linalg
 
 
 class ElectronicStructure(Hamiltonian):
@@ -41,7 +40,7 @@ class ElectronicStructure(Hamiltonian):
         default_occ = np.arange(num_occ)
 
         # compute Fock with default occupation
-        fock = copy.deepcopy(self.h1e)
+        fock = self.h1e.copy()
         fock += 2 * np.sum(self.h2e[:, :, default_occ, default_occ], axis=-1)
         fock -= np.sum(self.h2e[:, default_occ, default_occ, :], axis=1)
 
@@ -62,10 +61,7 @@ class ElectronicStructure(Hamiltonian):
         return occ_vec
 
     def _compatible(self, other):
-        if self.num_elec == other.num_elec and self.num_orb == other.num_orb:
-            return True
-        else:
-            return False
+        return self.num_elec == other.num_elec and self.num_orb == other.num_orb
 
     def __add__(self, other):
         if self._compatible(other):
@@ -233,7 +229,7 @@ class ElectronicStructure(Hamiltonian):
         if self.hf_state is None:
             raise RuntimeError("hf_state is not set — not in canonical HF basis")
         occ = np.where(self.hf_state[: self.num_orb] == 1)[0]
-        fock_op = copy.deepcopy(self.h1e)
+        fock_op = self.h1e.copy()
         fock_op += 2 * np.sum(self.h2e[:, :, occ, occ], axis=-1)
         fock_op -= np.sum(self.h2e[:, occ, occ, :], axis=1)
         return fock_op
@@ -255,7 +251,6 @@ class ElectronicStructure(Hamiltonian):
         if not np.all(np.abs(f) < 1e-6):
             return False
         if not np.allclose(np.diag(f), sorted(np.diag(f))):
-            print("The HF orbitals are not in the right order")
             return False
         return True
 
@@ -269,14 +264,12 @@ class ElectronicStructure(Hamiltonian):
         if self.hf_state is None:
             raise RuntimeError("hf_state is not set — not in canonical HF basis")
         if not self.is_canonical_hf_basis():
-            raise RuntimeError(f"Not in canonical orbital basis")
+            raise RuntimeError("Not in canonical orbital basis")
         occ = np.where(self.hf_state[: self.num_orb] == 1)[0]
         e = self.constant
         e += 2 * np.sum(np.diag(self.h1e)[occ])
-        for i in occ:
-            for j in occ:
-                e += 2 * self.h2e[i, i, j, j]
-                e -= self.h2e[i, j, j, i]
+        e += 2 * np.einsum("iijj->", self.h2e[np.ix_(occ, occ, occ, occ)])
+        e -= np.einsum("ijji->", self.h2e[np.ix_(occ, occ, occ, occ)])
         return e
 
     def hf_state_fci(self) -> np.ndarray:
@@ -349,94 +342,22 @@ class ElectronicStructure(Hamiltonian):
     def to_MajoranaPair(self):
         return MajoranaPair(h0=self.h0, h1e=self.h1e, h2e=self.h2e)
 
-    @jit(nopython=True)
-    def pauli_coeffs(self) -> (float, np.ndarray, np.ndarray):
-        """
-        Computes the coefficients of the Hamiltonian after Fermion-to-qubit mapping, i.e.
-        for resulting qubit Hamiltonian Σ_i h_i P_i, where P_i are Paulistrings, it returns
-        the coefficients h_i.
-
-        Returns tuple (coeff_constant, coeffs quadr terms, coeffs quart terms)
-
-        See equation F9 in https://quantum-journal.org/papers/q-2023-05-12-1000/
-        """
-        coeffs_quadr = []
-        coeffs_quart = []
-
-        coeff_const = self.h0
-        for p in range(self.num_orb):
-            coeff_const += self.h1e[p, p]
-            for r in range(self.num_orb):
-                coeff_const += 0.5 * self.h2e[p, p, r, r]
-                coeff_const -= 0.25 * self.h2e[p, r, r, p]
-
-        for p in range(self.num_orb):
-            for q in range(self.num_orb):
-                curr = self.h1e[p, q]
-                for r in range(self.num_orb):
-                    curr += self.h2e[p, q, r, r]
-                    curr -= 0.5 * self.h2e[p, r, r, q]
-                coeffs_quadr.append(1j / 2 * curr)
-                coeffs_quadr.append(1j / 2 * curr)
-
-        for r in range(self.num_orb - 1):
-            for p in range(r + 1, self.num_orb):
-                for q in range(self.num_orb - 1):
-                    for s in range(q + 1, self.num_orb):
-                        coeffs_quart.append(
-                            (self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 4
-                        )
-                        coeffs_quart.append(
-                            (self.h2e[p, q, r, s] - self.h2e[p, s, r, q]) / 4
-                        )
-
-        for r in range(self.num_orb - 1):
-            for p in range(r + 1, self.num_orb):
-                for q in range(self.num_orb):
-                    for s in range(q, self.num_orb):
-                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
-                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
-
-        for r in range(self.num_orb):
-            for p in range(r, self.num_orb):
-                for q in range(1, self.num_orb):
-                    for s in range(q):
-                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
-                        coeffs_quart.append(self.h2e[p, q, r, s] / 4)
-
-        for p in range(self.num_orb):
-            for q in range(self.num_orb):
-                coeffs_quart.append(self.h2e[p, q, p, q] / 4)
-
-        return coeff_const, np.array(coeffs_quadr), np.array(coeffs_quart)
-
     def sum_pauli_coeffs(self) -> float:
         """
-        Compute the sum of absolute values of coefficients of Hamiltonian expressed in terms of Paulis
-        after fermion-to-qubit mapping.
+        Compute the sum of absolute values of Pauli coefficients after the Jordan-Wigner mapping.
+        Uses jw_matrix() for the correct linear map from Majorana coefficients to Pauli coefficients.
         """
-        return ElectronicStructure._sum_pauli_coeffs(self.h1e, self.h2e)
-
-    @staticmethod
-    def _sum_pauli_coeffs(h1e: np.ndarray, h2e: np.ndarray) -> float:
-        n = h1e.shape[0]
-
-        # 1-electron part (vectorised)
-        curr = h1e + np.einsum("pqrr->pq", h2e) - 0.5 * np.einsum("prrq->pq", h2e)
-        res = np.sum(np.abs(curr))
-
-        # 2-electron antisymmetric part: sum |h2e[p,q,r,s] - h2e[p,s,r,q]| / 2
-        # for p > r, q < s — use triangle indices to avoid O(n^4) boolean mask
-        p_idx, r_idx = np.tril_indices(n, k=-1)  # p > r
-        q_idx, s_idx = np.triu_indices(n, k=1)  # q < s
-        p2, r2 = p_idx[:, None], r_idx[:, None]  # (n_pr, 1)
-        q2, s2 = q_idx[None, :], s_idx[None, :]  # (1, n_qs)
-        vals = h2e[p2, q2, r2, s2]
-        vals = vals - h2e[p2, s2, r2, q2]
-        res += np.sum(np.abs(vals)) / 2
-
-        res += np.sum(np.abs(h2e)) / 4
-        return res
+        majorana = self.to_MajoranaPair()
+        _, _, M = majorana.jw_matrix()
+        x = np.concatenate(
+            [
+                np.array(majorana.f1e).ravel(),
+                np.array(majorana.f2e_diffopp_samespin).ravel(),
+                np.array(majorana.f2e_diffop_diffspin).ravel(),
+                np.array(majorana.f2e_sameop_diffspin).ravel(),
+            ]
+        )
+        return float(np.sum(np.abs(M @ x)))
 
     def shift_number_op(self, shift1e: float, shift2e: np.ndarray, inplace=False):
         assert shift2e.shape == (self.num_orb, self.num_orb)
@@ -539,7 +460,6 @@ class ElectronicStructure(Hamiltonian):
             )
 
         n = self.num_orb
-        num_op = np.identity(n)
 
         # block structure from orb_symmetries
         unique_labels = np.unique(self.orb_symmetries)
@@ -550,17 +470,26 @@ class ElectronicStructure(Hamiltonian):
         block_tril_kappa = [(idx, np.tril_indices(len(idx), k=-1)) for idx in blocks]
         n_kappa = sum(len(ri) for _, (ri, _) in block_tril_kappa)
 
-        def _unpack_kappa(x_kappa: np.ndarray) -> np.ndarray:
-            kappa = np.zeros((n, n))
+        import jax
+        import jax.numpy as jnp
+
+        h1e_jax = jnp.array(self.h1e)
+        h2e_jax = jnp.array(self.h2e)
+        num_op_jax = jnp.eye(n)
+
+        # JAX-compatible unpack functions: use .at[].set() instead of in-place assignment
+        def _unpack_kappa(x_kappa):
+            kappa = jnp.zeros((n, n))
             offset = 0
             for idx, (ri, ci) in block_tril_kappa:
                 nb_params = len(ri)
                 vals = x_kappa[offset : offset + nb_params]
                 offset += nb_params
-                block = np.zeros((len(idx), len(idx)))
-                block[ri, ci] = vals
-                block[ci, ri] = -vals
-                kappa[np.ix_(idx, idx)] = block
+                nb = len(idx)
+                block = (
+                    jnp.zeros((nb, nb)).at[(ri, ci)].set(vals).at[(ci, ri)].set(-vals)
+                )
+                kappa = kappa.at[np.ix_(idx, idx)].set(block)
             return kappa
 
         # shift2e: symmetric block-diagonal matrix (ξ in BLISS notation)
@@ -568,18 +497,18 @@ class ElectronicStructure(Hamiltonian):
         block_triu_shift2e = [(idx, np.triu_indices(len(idx))) for idx in blocks]
         n_shift2e = sum(len(ri) for _, (ri, _) in block_triu_shift2e)
 
-        def _unpack_shift2e(x_shift2e: np.ndarray) -> np.ndarray:
-            shift2e = np.zeros((n, n))
+        def _unpack_shift2e(x_shift2e):
+            shift2e = jnp.zeros((n, n))
             offset = 0
             for idx, (ri, ci) in block_triu_shift2e:
                 nb = len(idx)
                 nb_params = nb * (nb + 1) // 2
                 vals = x_shift2e[offset : offset + nb_params]
                 offset += nb_params
-                block = np.zeros((nb, nb))
-                block[ri, ci] = vals
-                block[ci, ri] = vals
-                shift2e[np.ix_(idx, idx)] = block
+                block = (
+                    jnp.zeros((nb, nb)).at[(ri, ci)].set(vals).at[(ci, ri)].set(vals)
+                )
+                shift2e = shift2e.at[np.ix_(idx, idx)].set(block)
             return shift2e
 
         # initial parameter vector: all parameters start from a small random perturbation
@@ -592,56 +521,65 @@ class ElectronicStructure(Hamiltonian):
             x0_parts.append(rng.standard_normal(1 + n_shift2e) * perturbation)
         x0 = np.concatenate(x0_parts)
 
-        def _objective(x: np.ndarray) -> float:
+        def _objective(x):
             pos = 0
-            h1e_cur, h2e_cur = self.h1e, self.h2e
+            h1e_cur, h2e_cur = h1e_jax, h2e_jax
 
             if optimize_orbitals:
-                kappa = _unpack_kappa(x[pos : pos + n_kappa].astype(float))
+                kappa = _unpack_kappa(x[pos : pos + n_kappa])
                 pos += n_kappa
-                o = scipy.linalg.expm(kappa)
-                h1e_cur = np.einsum("pq,pr,qs->rs", h1e_cur, o, o, optimize="optimal")
-                h2e_cur = np.einsum("pqrs,pt->tqrs", h2e_cur, o, optimize="optimal")
-                h2e_cur = np.einsum("tqrs,qu->turs", h2e_cur, o, optimize="optimal")
-                h2e_cur = np.einsum("turs,rv->tuvs", h2e_cur, o, optimize="optimal")
-                h2e_cur = np.einsum("tuvs,sw->tuvw", h2e_cur, o, optimize="optimal")
+                o = jax.scipy.linalg.expm(kappa)
+                h1e_cur = jnp.einsum("pq,pr,qs->rs", h1e_cur, o, o)
+                h2e_cur = jnp.einsum("pqrs,pt->tqrs", h2e_cur, o)
+                h2e_cur = jnp.einsum("tqrs,qu->turs", h2e_cur, o)
+                h2e_cur = jnp.einsum("turs,rv->tuvs", h2e_cur, o)
+                h2e_cur = jnp.einsum("tuvs,sw->tuvw", h2e_cur, o)
 
             if optimize_shift:
-                shift1e = float(x[pos])
+                shift1e = x[pos]
                 shift2e = _unpack_shift2e(x[pos + 1 : pos + 1 + n_shift2e])
                 pos += 1 + n_shift2e
-                h1e_cur = h1e_cur + shift1e * num_op + (1 - self.num_elec) * shift2e
+                h1e_cur = h1e_cur + shift1e * num_op_jax + (1 - self.num_elec) * shift2e
                 h2e_cur = (
                     h2e_cur
-                    + np.einsum("pq,rs->pqrs", num_op, shift2e)
-                    + np.einsum("pq,rs->pqrs", shift2e, num_op)
+                    + jnp.einsum("pq,rs->pqrs", num_op_jax, shift2e)
+                    + jnp.einsum("pq,rs->pqrs", shift2e, num_op_jax)
                 )
 
             return objective_fn(h1e_cur, h2e_cur)
 
-        minimizer_kwargs = {"method": method}
+        _val_and_grad = jax.jit(jax.value_and_grad(_objective))
+
+        def _scipy_objective(x):
+            val, grad = _val_and_grad(jnp.array(x))
+            return float(val), np.array(grad)
+
+        minimizer_kwargs = {"method": method, "jac": True}
         if basinhopping:
             bh_kwargs = basinhopping_kwargs or {}
             result = scipy.optimize.basinhopping(
-                _objective, x0,
+                _scipy_objective,
+                x0,
                 minimizer_kwargs=minimizer_kwargs,
                 seed=seed,
                 **bh_kwargs,
             )
         else:
-            result = scipy.optimize.minimize(_objective, x0, **minimizer_kwargs)
+            result = scipy.optimize.minimize(_scipy_objective, x0, **minimizer_kwargs)
 
         if inplace:
-            x_opt = result.x
+            x_opt = np.array(result.x, dtype=float)
             pos = 0
             if optimize_orbitals:
-                kappa = _unpack_kappa(x_opt[pos : pos + n_kappa].astype(float))
+                kappa = np.array(_unpack_kappa(x_opt[pos : pos + n_kappa]), dtype=float)
                 o = scipy.linalg.expm(kappa)
                 self.rotate_orbitals(o, inplace=True)
                 pos += n_kappa
             if optimize_shift:
                 shift1e = float(x_opt[pos])
-                shift2e = _unpack_shift2e(x_opt[pos + 1 : pos + 1 + n_shift2e])
+                shift2e = np.array(
+                    _unpack_shift2e(x_opt[pos + 1 : pos + 1 + n_shift2e]), dtype=float
+                )
                 self.shift_number_op(shift1e, shift2e, inplace=True)
 
         return result
@@ -658,10 +596,27 @@ class ElectronicStructure(Hamiltonian):
         basinhopping_kwargs: dict = None,
     ) -> scipy.optimize.OptimizeResult:
         """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts.
-        Calls optimize() with ElectronicStructure._sum_pauli_coeffs as the objective.
+
+        M is precomputed once from jw_matrix() for the current orbital ordering and
+        closed over in the objective. This makes the objective JAX-differentiable via
+        _majorana_coeffs().
         """
+        import jax.numpy as jnp
+
+        _, _, M_sparse = self.to_MajoranaPair().jw_matrix()
+        M = jnp.array(M_sparse.toarray().real)
+
+        def _1norm(h1e, h2e):
+            _, f1e, f2e_ss, f2e_ds, f2e_so = MajoranaPair._majorana_coeffs(
+                0.0, h1e, h2e
+            )
+            x = jnp.concatenate(
+                [f1e.ravel(), f2e_ss.ravel(), f2e_ds.ravel(), f2e_so.ravel()]
+            )
+            return jnp.sum(jnp.abs(M @ x))
+
         return self.optimize(
-            ElectronicStructure._sum_pauli_coeffs,
+            _1norm,
             optimize_orbitals=optimize_orbitals,
             optimize_shift=optimize_shift,
             method=method,
