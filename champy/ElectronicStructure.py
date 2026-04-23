@@ -408,6 +408,7 @@ class ElectronicStructure(Hamiltonian):
         if inplace:
             self.h1e = h1e_rot
             self.h2e = h2e_rot
+            self.hf_state = None
         else:
             return self.h0, h1e_rot, h2e_rot
 
@@ -567,13 +568,17 @@ class ElectronicStructure(Hamiltonian):
         else:
             result = scipy.optimize.minimize(_scipy_objective, x0, **minimizer_kwargs)
 
+        if optimize_orbitals:
+            x_opt = np.array(result.x, dtype=float)
+            kappa = np.array(_unpack_kappa(x_opt[:n_kappa]), dtype=float)
+            o = scipy.linalg.expm(kappa)
+            result["orbrot"] = o
+
         if inplace:
             x_opt = np.array(result.x, dtype=float)
             pos = 0
             if optimize_orbitals:
-                kappa = np.array(_unpack_kappa(x_opt[pos : pos + n_kappa]), dtype=float)
-                o = scipy.linalg.expm(kappa)
-                self.rotate_orbitals(o, inplace=True)
+                self.rotate_orbitals(result["orbrot"], inplace=True)
                 pos += n_kappa
             if optimize_shift:
                 shift1e = float(x_opt[pos])
