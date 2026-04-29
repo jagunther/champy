@@ -1,7 +1,29 @@
 from champy.Hamiltonian import Hamiltonian
 from champy.PauliHamiltonian import PauliHamiltonian
+import functools
 import numpy as np
+import scipy.sparse
 import matplotlib.pyplot as plt
+
+
+@functools.lru_cache(maxsize=16)
+def _majorana_masks(n: int):
+    """Boolean index masks for _majorana_coeffs, cached by n.
+
+    Both masks depend only on the system size n (never on h1e/h2e), so they
+    are computed once per unique n and reused across calls — or baked in as
+    compile-time constants when the function is run under jax.jit.
+    """
+    idx = np.arange(n)
+    p = idx[:, None, None, None]
+    q = idx[None, :, None, None]
+    r = idx[None, None, :, None]
+    s = idx[None, None, None, :]
+    # (p>r)&(q<s): diff operators, same spin
+    mask_ss = (p > r) & (q < s)
+    # (p>r)|(p==r and q>s): diff operators, diff spin (simplified from two conditions)
+    mask_ds = (p > r) | ((p == r) & (q > s))
+    return mask_ss, mask_ds
 
 
 class MajoranaPair(Hamiltonian):
@@ -20,35 +42,63 @@ class MajoranaPair(Hamiltonian):
         self.h1e = h1e
         self.h2e = h2e
 
-        # constant: h0 + trace(h1e) + one-body part from h2e
-        self._constant = float(
+        (
+            self._constant,
+            self.f1e,
+            self.f2e_diffopp_samespin,
+            self.f2e_diffop_diffspin,
+            self.f2e_sameop_diffspin,
+        ) = MajoranaPair._majorana_coeffs(h0, h1e, h2e)
+
+        # lazy cache for jw_matrix()
+        self._jw_M = None
+        self._jw_pauli_labels = None
+        self._jw_col_labels = None
+
+    @staticmethod
+    @functools.partial(__import__("jax").jit, static_argnums=())
+    def _majorana_coeffs(h0: float, h1e, h2e) -> tuple:
+        """Compute the constant and Majorana coefficient tensors from h0, h1e, h2e.
+
+        JIT-compiled and JAX-differentiable. Boolean masks are cached by n via
+        _majorana_masks() and treated as compile-time constants under jax.jit.
+
+        Returns
+        -------
+        constant : scalar
+        f1e : array, shape (n, n)
+        f2e_diffopp_samespin : array, shape (n, n, n, n)
+        f2e_diffop_diffspin : array, shape (n, n, n, n)
+        f2e_sameop_diffspin : array, shape (n, n)
+        """
+        import jax.numpy as jnp
+
+        n = h1e.shape[0]
+        mask_ss, mask_ds = _majorana_masks(n)
+
+        constant = (
             h0
-            + np.trace(h1e)
-            + 0.5 * np.einsum("pprr->", h2e)
-            - 0.25 * np.einsum("prrp->", h2e)
+            + jnp.trace(h1e)
+            + 0.5 * jnp.einsum("pprr->", h2e)
+            - 0.25 * jnp.einsum("prrp->", h2e)
         )
 
-        # 1-el Majorana coefficients: Γ_pq,σ
-        self.f1e = (
-            h1e
-            + np.einsum("pqrr->pq", self.h2e)
-            - 0.5 * np.einsum("prrq->pq", self.h2e)
+        f1e = (
+            h1e + jnp.einsum("pqrr->pq", h2e) - 0.5 * jnp.einsum("prrq->pq", h2e)
         ) / 2
+        f2e_diffopp_samespin = jnp.where(mask_ss, h2e - jnp.swapaxes(h2e, 1, 3), 0) / 4
+        f2e_diffop_diffspin = jnp.where(mask_ds, h2e, 0) / 4
 
-        # 2-el Majorana coefficients, diff operators, same spin: Γ_pq,σ Γ_rs,σ
-        n = self.num_orb
-        p, q, r, s = np.ogrid[:n, :n, :n, :n]
-        self.f2e_diffopp_samespin = (
-            np.where((p > r) & (q < s), h2e - np.swapaxes(h2e, 1, 3), 0) / 4
+        # einsum("pqpq->pq", A) picks A[p,q,p,q] without summation — the where is redundant
+        f2e_sameop_diffspin = jnp.einsum("pqpq->pq", h2e) / 4
+
+        return (
+            constant,
+            f1e,
+            f2e_diffopp_samespin,
+            f2e_diffop_diffspin,
+            f2e_sameop_diffspin,
         )
-
-        # 2-el Majorana coefficients, diff operators, diff spin: Γ_pq,σ Γ_rs,τ
-        self.f2e_diffop_diffspin = np.where((p > r) & (q <= s), h2e, 0) / 4
-        self.f2e_diffop_diffspin += np.where((p >= r) & (q > s), h2e, 0) / 4
-
-        # 2-el Majorana coefficients, same operators, diff spin: Γ_pq,σ Γ_pq,τ
-        self.f2e_sameop_diffspin = np.where((p == r) & (q == s), h2e, 0) / 4
-        self.f2e_sameop_diffspin = np.einsum("pqpq->pq", self.f2e_sameop_diffspin)
 
     def _compatible(self, other):
         assert self.num_orb == other.num_orb
@@ -178,8 +228,8 @@ class MajoranaPair(Hamiltonian):
         degree = w.sum(axis=1)
         L = np.diag(degree) - w
         _, eigvecs = np.linalg.eigh(L)
-        fiedler = eigvecs[:, 1]          # 2nd smallest eigenvector
-        perm = np.argsort(fiedler)       # orbital index → JW position
+        fiedler = eigvecs[:, 1]  # 2nd smallest eigenvector
+        perm = np.argsort(fiedler)  # orbital index → JW position
 
         # ── 2. Local swap refinement ─────────────────────────────────────────
         improved = True
@@ -194,7 +244,9 @@ class MajoranaPair(Hamiltonian):
 
         return perm
 
-    def apply_jw_ordering(self, perm: np.ndarray = None, inplace: bool = False) -> "MajoranaPair | None":
+    def apply_jw_ordering(
+        self, perm: np.ndarray = None, inplace: bool = False
+    ) -> "MajoranaPair | None":
         """Permute orbital indices according to a JW ordering.
 
         :param perm: permutation array where perm[i] is the orbital placed at position i.
@@ -213,6 +265,9 @@ class MajoranaPair(Hamiltonian):
             self.f2e_diffopp_samespin = self.f2e_diffopp_samespin[ix4]
             self.f2e_diffop_diffspin = self.f2e_diffop_diffspin[ix4]
             self.f2e_sameop_diffspin = self.f2e_sameop_diffspin[ix]
+            self._jw_M = None
+            self._jw_pauli_labels = None
+            self._jw_col_labels = None
             return None
         return MajoranaPair(h0=0, h1e=self.h1e[ix], h2e=self.h2e[ix4])
 
@@ -259,16 +314,24 @@ class MajoranaPair(Hamiltonian):
         def _draw_vertices(ax):
             for p in range(n):
                 circle = plt.Circle(
-                    pos[p], 0.07,
+                    pos[p],
+                    0.07,
                     facecolor=cmap(norm(diag_vals[p])),
-                    edgecolor="black", linewidth=1.5, zorder=3,
+                    edgecolor="black",
+                    linewidth=1.5,
+                    zorder=3,
                 )
                 ax.add_patch(circle)
                 r, g, b, _ = cmap(norm(diag_vals[p]))
                 luminance = 0.299 * r + 0.587 * g + 0.114 * b
                 ax.text(
-                    *pos[p], str(p), ha="center", va="center",
-                    fontsize=13, fontweight="bold", zorder=4,
+                    *pos[p],
+                    str(p),
+                    ha="center",
+                    va="center",
+                    fontsize=13,
+                    fontweight="bold",
+                    zorder=4,
                     color="white" if luminance < 0.5 else "black",
                 )
             ax.set_aspect("equal")
@@ -283,8 +346,7 @@ class MajoranaPair(Hamiltonian):
             ax.plot(xs, ys, color=cmap(norm(w[p, q])), lw=2, zorder=1)
         _draw_vertices(ax)
         ax.set_title(
-            "Orbital graph (spin-↑)\n"
-            r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
+            "Orbital graph (spin-↑)\n" r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
             fontsize=10,
         )
 
@@ -305,69 +367,118 @@ class MajoranaPair(Hamiltonian):
 
         plt.show()
 
-    def jordan_wigner(self) -> PauliHamiltonian:
+    def jw_matrix(self):
+        """Build (lazily) the linear map M from Majorana coefficients to Pauli coefficients.
+
+        The JW transform is linear: coeffs_pauli = M @ x, where x is the
+        concatenation of [f1e.flat, f2e_diffopp_samespin.flat,
+        f2e_diffop_diffspin.flat, f2e_sameop_diffspin.flat].
+
+        M is computed once and cached. Subsequent calls return the cached result.
+
+        Returns
+        -------
+        pauli_labels : list[str]
+            Ordered list of Pauli string labels (rows of M).
+        col_labels : list[str]
+            Human-readable labels for each column of M.
+        M : scipy.sparse.csr_matrix, shape (num_pauli_terms, len(x)), complex
+        """
+        if self._jw_M is not None:
+            return self._jw_pauli_labels, self._jw_col_labels, self._jw_M
+
         n = self.num_orb
         total_qubits = 2 * n
-        labels = []
-        coeffs = []
 
-        # constant
-        labels.append("I" * total_qubits)
-        coeffs.append(self.constant)
+        # Accumulate COO entries
+        row_map = {}  # label -> row index
+        col_labels = []
+        coo_rows, coo_cols, coo_vals = [], [], []
 
-        # 1-electron: f1e[p,q] maps to one Pauli per spin sector
+        def _add(lbl, phase, c):
+            if lbl not in row_map:
+                row_map[lbl] = len(row_map)
+            coo_rows.append(row_map[lbl])
+            coo_cols.append(c)
+            coo_vals.append(phase)
+
+        col = 0
+
+        # ── f1e[p,q]: one Pauli per spin sector ─────────────────────────────
         for p in range(n):
             for q in range(n):
-                if self.f1e[p, q] == 0:
-                    continue
+                col_labels.append(f"f1e[{p},{q}]")
                 for spin_offset in (0, n):
-                    phase, l = _jw_pauli(p, q, spin_offset, total_qubits)
-                    labels.append(l)
-                    coeffs.append(phase * self.f1e[p, q])
+                    ph, lbl = _jw_pauli(p, q, spin_offset, total_qubits)
+                    _add(lbl, complex(ph), col)
+                col += 1
 
-        # 2-electron same spin, different operators: Γ_{pq,σ} Γ_{rs,σ}
+        # ── f2e_diffopp_samespin[p,q,r,s]: one Pauli per spin sector ────────
         for p in range(n):
             for q in range(n):
                 for r in range(n):
                     for s in range(n):
-                        coeff = self.f2e_diffopp_samespin[p, q, r, s]
-                        if coeff == 0:
-                            continue
+                        col_labels.append(f"f2e_ss[{p},{q},{r},{s}]")
                         for spin_offset in (0, n):
-                            phase1, l1 = _jw_pauli(p, q, spin_offset, total_qubits)
-                            phase2, l2 = _jw_pauli(r, s, spin_offset, total_qubits)
-                            phase, label = _multiply_pauli_strings(l1, l2)
-                            labels.append(label)
-                            coeffs.append(coeff * phase1 * phase2 * phase)
+                            ph1, l1 = _jw_pauli(p, q, spin_offset, total_qubits)
+                            ph2, l2 = _jw_pauli(r, s, spin_offset, total_qubits)
+                            ph, lbl = _multiply_pauli_strings(l1, l2)
+                            _add(lbl, complex(ph1 * ph2) * ph, col)
+                        col += 1
 
-        # 2-electron different spin, different operators: Γ_{pq,σ} Γ_{rs,τ}
+        # ── f2e_diffop_diffspin[p,q,r,s]: two spin combinations ─────────────
         for p in range(n):
             for q in range(n):
                 for r in range(n):
                     for s in range(n):
-                        coeff = self.f2e_diffop_diffspin[p, q, r, s]
-                        if coeff == 0:
-                            continue
+                        col_labels.append(f"f2e_ds[{p},{q},{r},{s}]")
                         for spin_offset in [(0, n), (n, 0)]:
-                            phase1, l1 = _jw_pauli(p, q, spin_offset[0], total_qubits)
-                            phase2, l2 = _jw_pauli(r, s, spin_offset[1], total_qubits)
-                            phase, label = _multiply_pauli_strings(l1, l2)
-                            labels.append(label)
-                            coeffs.append(coeff * phase1 * phase2 * phase)
+                            ph1, l1 = _jw_pauli(p, q, spin_offset[0], total_qubits)
+                            ph2, l2 = _jw_pauli(r, s, spin_offset[1], total_qubits)
+                            ph, lbl = _multiply_pauli_strings(l1, l2)
+                            _add(lbl, complex(ph1 * ph2) * ph, col)
+                        col += 1
 
-        # 2-electron same operator, different spin: Γ_{pq,↑} Γ_{pq,↓}
+        # ── f2e_sameop_diffspin[p,q]: one Pauli ─────────────────────────────
         for p in range(n):
             for q in range(n):
-                coeff = self.f2e_sameop_diffspin[p, q]
-                if coeff == 0:
-                    continue
-                phase1, l1 = _jw_pauli(p, q, 0, total_qubits)
-                phase2, l2 = _jw_pauli(p, q, n, total_qubits)
-                phase, label = _multiply_pauli_strings(l1, l2)
-                labels.append(label)
-                coeffs.append(coeff * phase1 * phase2 * phase)
+                col_labels.append(f"f2e_so[{p},{q}]")
+                ph1, l1 = _jw_pauli(p, q, 0, total_qubits)
+                ph2, l2 = _jw_pauli(p, q, n, total_qubits)
+                ph, lbl = _multiply_pauli_strings(l1, l2)
+                _add(lbl, complex(ph1 * ph2) * ph, col)
+                col += 1
 
-        return PauliHamiltonian.from_labels_and_weights(labels, coeffs)
+        n_rows = len(row_map)
+        n_cols = col
+        M = scipy.sparse.coo_matrix(
+            (coo_vals, (coo_rows, coo_cols)), shape=(n_rows, n_cols), dtype=complex
+        ).tocsr()
+
+        self._jw_pauli_labels = list(row_map.keys())
+        self._jw_col_labels = col_labels
+        self._jw_M = M
+
+        return self._jw_pauli_labels, self._jw_col_labels, self._jw_M
+
+    def jordan_wigner(self) -> PauliHamiltonian:
+        pauli_labels, _, M = self.jw_matrix()
+        x = np.concatenate(
+            [
+                self.f1e.ravel(),
+                self.f2e_diffopp_samespin.ravel(),
+                self.f2e_diffop_diffspin.ravel(),
+                self.f2e_sameop_diffspin.ravel(),
+            ]
+        )
+        coeffs = np.array(M @ x).ravel()
+
+        # prepend the constant term
+        total_qubits = 2 * self.num_orb
+        all_labels = ["I" * total_qubits] + list(pauli_labels)
+        all_coeffs = np.concatenate([[self.constant], coeffs])
+
+        return PauliHamiltonian.from_labels_and_weights(all_labels, all_coeffs)
 
 
 def _jw_pauli(p, q, spin_offset, total_qubits):

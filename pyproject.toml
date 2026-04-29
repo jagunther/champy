@@ -20,6 +20,7 @@ dependencies = [
     "scipy",
     "openfermion",
     "pauliarray",
+    "jax[cpu]",
 ]
 
 [project.urls]
