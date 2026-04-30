@@ -1,5 +1,45 @@
+import functools
 import numpy as np
 from champy.PauliHamiltonian import PauliHamiltonian
+
+
+@functools.lru_cache(maxsize=16)
+def _tz_masks(n: int):
+    """Boolean masks for ElectronicStructureTZ._coefficients, cached by n.
+
+    Both masks depend only on the system size n (never on h1e/h2e), so they
+    are computed once per unique n and reused across calls — or baked in as
+    compile-time constants when the function is run under jax.jit.
+
+    Returns
+    -------
+    mask_t : (n, n) bool
+        Upper-triangular p<q canonical-pair mask. Selects the index range
+        for T_pq (and its 3- and 4-index extensions on the (p,q) axes).
+    mask_tz : (n, n, n) bool
+        Mask for the same-spin TZ term T_pqx Z_rx. Excludes r ∈ {p, q}
+        (those configurations would not produce a TZ_same term).
+    mask_tt_same : (n, n, n, n) bool
+        Mask for the same-spin TT term T_pqx T_rsx with p<q, r<s, p<r,
+        and {p,q} ∩ {r,s} = ∅.
+    mask_tt_opp : (n, n, n, n) bool
+        Mask for the opposite-spin TT term T_pqu T_rsd, p<q and r<s
+        (independent (p,q) and (r,s) pairs).
+    """
+    mask_t = np.triu(np.ones((n, n), dtype=bool), k=1)
+    mask_tz = np.ones((n, n, n), dtype=bool)
+    for p in range(n):
+        mask_tz[p, :, p] = False
+        mask_tz[:, p, p] = False
+    mask_tt_opp = mask_t[:, :, None, None] & mask_t[None, None, :, :]
+    mask_tt_same = mask_tt_opp.copy()
+    for p in range(n):
+        for q in range(p + 1, n):
+            for r in range(n):
+                for s in range(r + 1, n):
+                    if r <= p or len({p, q} & {r, s}) > 0:
+                        mask_tt_same[p, q, r, s] = False
+    return mask_t, mask_tz, mask_tt_same, mask_tt_opp
 
 
 QASM_GATE_DEFS = """\
@@ -169,60 +209,56 @@ class ElectronicStructureTZ:
         self.coeff_TT_opp = coeffs["TT_opp"]
 
     @staticmethod
-    def _coefficients(h1e: np.ndarray, h2e: np.ndarray) -> dict:
+    @functools.partial(__import__("jax").jit, static_argnums=())
+    def _coefficients(h1e, h2e) -> dict:
+        """Build the eight TZ coefficient tensors from h1e, h2e.
+
+        JIT-compiled and JAX-differentiable. Boolean masks are cached by n
+        via _tz_masks() and treated as compile-time constants under jax.jit.
+        """
+        import jax.numpy as jnp
+
         n = h1e.shape[0]
-        mask_pq = np.triu(np.ones((n, n), dtype=bool), k=1)
-        mask_rs = mask_pq
-        coulomb = np.einsum("ppqq->pq", h2e)
-        exchange = np.einsum("pqpq->pq", h2e)
-        h_pqrr = np.einsum("pqrr->pqr", h2e)
+        mask_t, mask_tz, mask_tt_same, mask_tt_opp = _tz_masks(n)
+
+        coulomb = jnp.einsum("ppqq->pq", h2e)
+        exchange = jnp.einsum("pqpq->pq", h2e)
+        h_pqrr = jnp.einsum("pqrr->pqr", h2e)
+        h_prrq = jnp.einsum("prrq->pqr", h2e)
 
         # Z_px: 1/2 (1/2 sum_q h_pqpq - h_pp - sum_q h_ppqq) per p
         coeff_Z = 0.5 * (
-            0.5 * np.einsum("pqpq->p", h2e)
-            - np.diag(h1e)
-            - np.einsum("ppqq->p", h2e)
+            0.5 * jnp.einsum("pqpq->p", h2e)
+            - jnp.diag(h1e)
+            - jnp.einsum("ppqq->p", h2e)
         )
 
         # T_pqx: (h_pq - 1/2 sum_r h_prrq + sum_r h_pqrr) per p<q
-        coeff_T = np.triu(
-            h1e - 0.5 * np.einsum("prrq->pq", h2e) + np.einsum("pqrr->pq", h2e),
-            k=1,
+        coeff_T = jnp.where(
+            mask_t,
+            h1e - 0.5 * jnp.einsum("prrq->pq", h2e) + jnp.einsum("pqrr->pq", h2e),
+            0.0,
         )
 
         # Z_px Z_qx (same-spin): 1/4 (h_ppqq - h_pqpq) per p<q
-        coeff_ZZ_same = np.triu(0.25 * (coulomb - exchange), k=1)
+        coeff_ZZ_same = jnp.where(mask_t, 0.25 * (coulomb - exchange), 0.0)
 
         # Z_pu Z_qd (opposite-spin): 1/4 h_ppqq per (p, q)
         coeff_ZZ_opp = 0.25 * coulomb
 
         # TZ opposite-spin: -1/2 h_pqrr, all r
-        coeff_TZ_opp = -0.5 * h_pqrr * mask_pq[:, :, None]
+        coeff_TZ_opp = jnp.where(mask_t[:, :, None], -0.5 * h_pqrr, 0.0)
 
         # TZ same-spin: 1/2 (h_prrq - h_pqrr), r not in {p,q}
-        h_prrq = np.einsum("prrq->pqr", h2e)
-        coeff_TZ_same = 0.5 * (h_prrq - h_pqrr) * mask_pq[:, :, None]
-        mask_r = np.ones((n, n, n), dtype=bool)
-        for p in range(n):
-            mask_r[p, :, p] = False
-            mask_r[:, p, p] = False
-        coeff_TZ_same = coeff_TZ_same * mask_r
+        coeff_TZ_same = jnp.where(
+            mask_t[:, :, None] & mask_tz, 0.5 * (h_prrq - h_pqrr), 0.0
+        )
 
-        # TT masks
-        mask_4d = mask_pq[:, :, None, None] & mask_rs[None, None, :, :]
+        # same-spin TT: {p,q} ∩ {r,s} = ∅, canonical order p < r
+        coeff_TT_same = jnp.where(mask_tt_same, h2e, 0.0)
 
-        # same-spin: {p,q} ∩ {r,s} = ∅, canonical order p < r
-        mask_4d_same = mask_4d.copy()
-        for p in range(n):
-            for q in range(p + 1, n):
-                for r in range(n):
-                    for s in range(r + 1, n):
-                        if r <= p or len({p, q} & {r, s}) > 0:
-                            mask_4d_same[p, q, r, s] = False
-        coeff_TT_same = h2e * mask_4d_same
-
-        # opposite-spin: all (p<q, r<s)
-        coeff_TT_opp = h2e * mask_4d
+        # opposite-spin TT: all (p<q, r<s)
+        coeff_TT_opp = jnp.where(mask_tt_opp, h2e, 0.0)
 
         return {
             "Z": coeff_Z,
@@ -377,6 +413,243 @@ class ElectronicStructureTZ:
             return 8
         extra = lambda k: 2 * k - 2 if k >= 2 else 0
         return 10 + extra(delta1) + extra(delta2)
+
+    # ── JW ordering ─────────────────────────────────────────────────────────
+
+    def _circuit_cost_tensors(self) -> dict:
+        """Lazily build and cache 2-qubit-gate cost tensors keyed by term
+        group. Each tensor is indexed by qubit positions: entry [i, j, ...]
+        is the cost when the term's orbital indices land at positions
+        (i, j, ...) in the JW string. Z and ZZ entries are perm-independent
+        scalars.
+        """
+        if hasattr(self, "_cost_tensors"):
+            return self._cost_tensors
+        n = self.num_orb
+        cost_T = np.zeros((n, n))
+        cost_TZ_opp = np.zeros((n, n))
+        cost_TZ_same = np.zeros((n, n, n))
+        cost_TT_opp = np.zeros((n, n, n, n))
+        cost_TT_same = np.zeros((n, n, n, n))
+        for p in range(n):
+            for q in range(n):
+                if p == q:
+                    continue
+                cost_T[p, q] = self.t_circuit_cost(p, q)
+                cost_TZ_opp[p, q] = self.tz_opp_circuit_cost(p, q)
+                for r in range(n):
+                    if r != p and r != q:
+                        cost_TZ_same[p, q, r] = self.tz_same_circuit_cost(p, q, r)
+                    for s in range(n):
+                        if s == r:
+                            continue
+                        cost_TT_opp[p, q, r, s] = self.tt_opp_circuit_cost(p, q, r, s)
+                        if len({p, q, r, s}) == 4:
+                            cost_TT_same[p, q, r, s] = self.tt_same_circuit_cost(p, q, r, s)
+        self._cost_tensors = {
+            "Z": self.z_circuit_cost(),
+            "ZZ": self.zz_circuit_cost(),
+            "T": cost_T,
+            "TZ_opp": cost_TZ_opp,
+            "TZ_same": cost_TZ_same,
+            "TT_opp": cost_TT_opp,
+            "TT_same": cost_TT_same,
+        }
+        return self._cost_tensors
+
+    def jw_cost(self, perm: np.ndarray) -> float:
+        """Total 2-qubit-gate cost Σ_α |c_α| · gates_α(perm) under spatial-
+        orbital permutation `perm` (perm[i] = orbital placed at JW position
+        i within each spin sector).
+        """
+        n = self.num_orb
+        pos = np.empty(n, dtype=int)
+        pos[perm] = np.arange(n)
+        t = self._circuit_cost_tensors()
+
+        T_p = t["T"][np.ix_(pos, pos)]
+        TZopp_p = t["TZ_opp"][np.ix_(pos, pos)]
+        TZsame_p = t["TZ_same"][np.ix_(pos, pos, pos)]
+        TTopp_p = t["TT_opp"][np.ix_(pos, pos, pos, pos)]
+        TTsame_p = t["TT_same"][np.ix_(pos, pos, pos, pos)]
+
+        cost = (
+            2.0 * t["Z"] * np.sum(np.abs(self.coeff_Z))
+            + 2.0 * t["ZZ"] * np.sum(np.abs(self.coeff_ZZ_same))
+            + t["ZZ"] * np.sum(np.abs(self.coeff_ZZ_opp))
+            + 2.0 * np.sum(np.abs(self.coeff_T) * T_p)
+            + 2.0 * np.sum(np.abs(self.coeff_TZ_opp) * TZopp_p[..., None])
+            + 2.0 * np.sum(np.abs(self.coeff_TZ_same) * TZsame_p)
+            + np.sum(np.abs(self.coeff_TT_opp) * TTopp_p)
+            + 2.0 * np.sum(np.abs(self.coeff_TT_same) * TTsame_p)
+        )
+        return float(cost)
+
+    def _jw_pair_weights(self) -> np.ndarray:
+        """Symmetric n×n weight matrix aggregating coefficient magnitudes for
+        orbital pairs (p,q) appearing as hopping pairs. Used to seed the
+        spectral ordering in optimize_jw_ordering."""
+        w = np.abs(self.coeff_T).copy()
+        w += np.einsum("pqr->pq", np.abs(self.coeff_TZ_opp))
+        w += np.einsum("pqr->pq", np.abs(self.coeff_TZ_same))
+        w += np.einsum("pqrs->pq", np.abs(self.coeff_TT_opp))
+        w += np.einsum("pqrs->rs", np.abs(self.coeff_TT_opp))
+        w += np.einsum("pqrs->pq", np.abs(self.coeff_TT_same))
+        w += np.einsum("pqrs->rs", np.abs(self.coeff_TT_same))
+        return w + w.T
+
+    def optimize_jw_ordering(self) -> np.ndarray:
+        """Find a low-cost Jordan-Wigner ordering via spectral seeding +
+        adjacent-swap refinement against `jw_cost`. Returns a permutation
+        array π of length num_orb where π[i] is the spatial orbital placed
+        at JW position i (within each spin sector)."""
+        w = self._jw_pair_weights()
+        n = self.num_orb
+
+        # ── 1. Spectral seed (Fiedler vector of weighted Laplacian) ─────────
+        degree = w.sum(axis=1)
+        L = np.diag(degree) - w
+        _, eigvecs = np.linalg.eigh(L)
+        fiedler = eigvecs[:, 1]
+        perm = np.argsort(fiedler)
+
+        # ── 2. Adjacent-swap refinement against actual jw_cost ──────────────
+        improved = True
+        while improved:
+            improved = False
+            for i in range(n - 1):
+                swapped = perm.copy()
+                swapped[i], swapped[i + 1] = swapped[i + 1], swapped[i]
+                if self.jw_cost(swapped) < self.jw_cost(perm):
+                    perm = swapped
+                    improved = True
+
+        return perm
+
+    def apply_jw_ordering(
+        self, perm: np.ndarray = None, inplace: bool = False
+    ) -> "ElectronicStructureTZ | None":
+        """Permute spatial orbital indices according to a JW ordering.
+
+        :param perm: permutation array where perm[i] is the orbital placed at
+                     position i. If None, calls optimize_jw_ordering().
+        :param inplace: if True, rebuild this instance in-place and return None;
+                        if False, return a new ElectronicStructureTZ.
+        """
+        if perm is None:
+            perm = self.optimize_jw_ordering()
+        ix = np.ix_(perm, perm)
+        ix4 = np.ix_(perm, perm, perm, perm)
+        h1e_p = self.h1e[ix]
+        h2e_p = self.h2e[ix4]
+        if inplace:
+            self.__init__(h0=self.h0, h1e=h1e_p, h2e=h2e_p)
+            return None
+        return ElectronicStructureTZ(h0=self.h0, h1e=h1e_p, h2e=h2e_p)
+
+    def plot_orbital_graph(self, optimize_jw: bool = False) -> None:
+        """Plot the orbital graph using a spring layout, optionally with JW
+        orderings overlaid as paths.
+
+        Vertex weight: |coeff_Z[p]|. Edge weight: aggregated hopping-pair
+        magnitude from _jw_pair_weights() (same matrix that seeds
+        optimize_jw_ordering). Heavier edges pull nodes closer in the layout.
+
+        :param optimize_jw: if True, overlay the optimized JW ordering in
+                            addition to the default identity ordering.
+        """
+        import matplotlib.pyplot as plt
+        import networkx as nx
+        import matplotlib.colors as mcolors
+        import matplotlib.colorbar as mcolorbar
+
+        n = self.num_orb
+        w = self._jw_pair_weights()
+        diag_vals = np.abs(self.coeff_Z)
+
+        cmap = plt.colormaps["Blues"]
+        nonzero = w[w > 0]
+        vmin = nonzero.min() if nonzero.size > 0 else 1e-12
+        vmax = max(w.max(), diag_vals.max(), vmin * 10)
+        norm = mcolors.LogNorm(vmin=vmin, vmax=vmax)
+
+        # Build graph with edge weights and compute layout
+        G = nx.Graph()
+        G.add_nodes_from(range(n))
+        for p in range(n):
+            for q in range(p + 1, n):
+                if w[p, q] > 1e-6 * w.max():
+                    G.add_edge(p, q, weight=w[p, q])
+        pos = nx.spring_layout(G, weight="weight", seed=42)
+
+        # JW orderings to display
+        jw_orderings = [("JW default", np.arange(n), "red")]
+        if optimize_jw:
+            jw_orderings.append(("JW optimized", self.optimize_jw_ordering(), "green"))
+
+        n_cols = 1 + len(jw_orderings)
+        fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
+        fig.subplots_adjust(right=0.88)
+
+        def _draw_vertices(ax):
+            for p in range(n):
+                circle = plt.Circle(
+                    pos[p],
+                    0.07,
+                    facecolor=cmap(norm(diag_vals[p])) if diag_vals[p] > 0 else "lightgrey",
+                    edgecolor="black",
+                    linewidth=1.5,
+                    zorder=3,
+                )
+                ax.add_patch(circle)
+                if diag_vals[p] > 0:
+                    r, g, b, _ = cmap(norm(diag_vals[p]))
+                    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                    text_color = "white" if luminance < 0.5 else "black"
+                else:
+                    text_color = "black"
+                ax.text(
+                    *pos[p],
+                    str(p),
+                    ha="center",
+                    va="center",
+                    fontsize=13,
+                    fontweight="bold",
+                    zorder=4,
+                    color=text_color,
+                )
+            ax.set_aspect("equal")
+            ax.axis("off")
+            ax.autoscale_view()
+
+        # ── Left: orbital interaction graph ──────────────────────────────────
+        ax = axes[0]
+        for p, q in G.edges():
+            xs = [pos[p][0], pos[q][0]]
+            ys = [pos[p][1], pos[q][1]]
+            ax.plot(xs, ys, color=cmap(norm(w[p, q])), lw=2, zorder=1)
+        _draw_vertices(ax)
+        ax.set_title(
+            "Orbital graph\nvertex: $|c_{Z_p}|$,  edge: hopping-pair weight",
+            fontsize=10,
+        )
+
+        # ── Right: one subplot per JW ordering ───────────────────────────────
+        for ax, (title, perm, color) in zip(axes[1:], jw_orderings):
+            cost = self.jw_cost(perm)
+            for i in range(n - 1):
+                xs = [pos[perm[i]][0], pos[perm[i + 1]][0]]
+                ys = [pos[perm[i]][1], pos[perm[i + 1]][1]]
+                ax.plot(xs, ys, color=color, lw=2, zorder=1)
+            _draw_vertices(ax)
+            ax.set_title(f"{title}\ncost = {cost:.3f}", fontsize=10)
+
+        # Shared colorbar
+        cax = fig.add_axes([0.91, 0.15, 0.02, 0.7])
+        mcolorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation="vertical")
+        cax.set_title(r"$w$", fontsize=10)
+
+        plt.show()
 
     @staticmethod
     def z_circuit(p: int, x: int, angle: float, n: int, offset: int = 0) -> str:
