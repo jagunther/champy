@@ -290,6 +290,95 @@ class ElectronicStructureTZ:
         return p - 1 + x * n + offset
 
     @staticmethod
+    def z_circuit_cost() -> int:
+        """Entangling gate count for z_circuit (single-qubit Rz)."""
+        return 0
+
+    @staticmethod
+    def zz_circuit_cost() -> int:
+        """Entangling gate count for zz_circuit (one RZZ)."""
+        return 1
+
+    @staticmethod
+    def t_circuit_cost(p: int, q: int) -> int:
+        """Entangling gate count for t_circuit.
+
+        d=1: Givens (2). d>=2: parity tree + xxyy_zbasis + 2 RZZ (2d).
+        """
+        d = abs(q - p)
+        if d == 1:
+            return 2
+        return 2 * d
+
+    @staticmethod
+    def tz_opp_circuit_cost(p: int, q: int) -> int:
+        """Entangling gate count for tz_opp_circuit (independent of r).
+
+        d=1: 4. d>=2: 2d+2.
+        """
+        d = abs(q - p)
+        if d == 1:
+            return 4
+        return 2 * d + 2
+
+    @staticmethod
+    def tz_same_circuit_cost(p: int, q: int, r: int) -> int:
+        """Entangling gate count for tz_same_circuit.
+
+        r outside [p,q], d=1: 4. r outside, d>=2: 2d+2.
+        r inside, d=2: 2 (Givens). r inside, d>=3: 2(d-1).
+        """
+        d = abs(q - p)
+        r_inside = min(p, q) < r < max(p, q)
+        if not r_inside:
+            return 4 if d == 1 else 2 * d + 2
+        return 2 if d == 2 else 2 * (d - 1)
+
+    @staticmethod
+    def tt_opp_circuit_cost(p: int, q: int, r: int, s: int) -> int:
+        """Entangling gate count for tt_opp_circuit.
+
+        d1=d2=1: xxyy_zbasis + 4 RZZ (8). Otherwise: 2(d1+d2)+6.
+        """
+        d1 = abs(q - p)
+        d2 = abs(s - r)
+        if d1 == 1 and d2 == 1:
+            return 8
+        return 2 * (d1 + d2) + 6
+
+    @staticmethod
+    def tt_same_circuit_cost(p: int, q: int, r: int, s: int) -> int:
+        """Entangling gate count for same-spin TT (any of nonoverlap, interleaved, nested).
+
+        Dispatches based on the qubit ordering of (p,q) and (r,s):
+        - non-overlapping (p<q<r<s or r<s<p<q): 2(d1+d2)+6 (or 8 if d1=d2=1).
+        - interleaved (p<r<q<s or r<p<s<q): 10 + extra(|r-p|) + extra(|s-q|),
+          which becomes 8 in the minimum case (gaps == 1).
+        - nested (p<r<s<q or r<p<q<s): same form as interleaved on inner gaps.
+        Here extra(k) = 2k-2 if k>=2 else 0; the minimum case uses xxyy_zbasis (8 gates).
+        """
+        lo1, hi1 = min(p, q), max(p, q)
+        lo2, hi2 = min(r, s), max(r, s)
+        if lo1 > lo2:
+            lo1, hi1, lo2, hi2 = lo2, hi2, lo1, hi1
+
+        if hi1 < lo2:
+            d1, d2 = hi1 - lo1, hi2 - lo2
+            if d1 == 1 and d2 == 1:
+                return 8
+            return 2 * (d1 + d2) + 6
+        if hi1 < hi2:
+            delta1 = lo2 - lo1
+            delta2 = hi2 - hi1
+        else:
+            delta1 = lo2 - lo1
+            delta2 = hi1 - hi2
+        if delta1 == 1 and delta2 == 1:
+            return 8
+        extra = lambda k: 2 * k - 2 if k >= 2 else 0
+        return 10 + extra(delta1) + extra(delta2)
+
+    @staticmethod
     def z_circuit(p: int, x: int, angle: float, n: int, offset: int = 0) -> str:
         """QASM circuit for exp(i * angle * Z_px)."""
         q = ElectronicStructureTZ._qubit(p, x, n, offset)
@@ -434,9 +523,8 @@ class ElectronicStructureTZ:
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqu T_rsd).
 
-        Diagonalizes both T operators in parallel, then performs 4 diagonal
-        ZZ rotations by accumulating parities onto qubit p.
-        Cost: 2(d1 + d2) + 6 entangling gates (d1=|q-p|, d2=|s-r|, both >= 2).
+        d1=d2=1: xxyy_zbasis on both pairs + 4 RZZ (8 entangling gates).
+        d1>=2 or d2>=2: Bell + parity tree + diagonal_4rot (2(d1+d2)+6 entangling).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, 0, n, offset)
@@ -445,6 +533,19 @@ class ElectronicStructureTZ:
         qs = _q(s_orb, 1, n, offset)
         d1 = abs(qq - qp)
         d2 = abs(qs - qr)
+
+        if d1 == 1 and d2 == 1:
+            s = ""
+            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+            s += f"xxyy_zbasis q[{qr}],q[{qs}];\n"
+            s += f"rzz({-angle/2}) q[{qp}],q[{qr}];\n"
+            s += f"rzz({-angle/2}) q[{qp}],q[{qs}];\n"
+            s += f"rzz({-angle/2}) q[{qq}],q[{qr}];\n"
+            s += f"rzz({-angle/2}) q[{qq}],q[{qs}];\n"
+            s += f"xxyy_zbasis_inv q[{qr}],q[{qs}];\n"
+            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+            return s
+
         sign1 = 1 if qq > qp else -1
         sign2 = 1 if qs > qr else -1
         inter1 = [qp + sign1 * i for i in range(1, d1)]
@@ -452,7 +553,6 @@ class ElectronicStructureTZ:
         m1 = inter1[0]
         m2 = inter2[0]
         a = angle / 4
-
 
         s = ""
         s += _qasm_parity_tree(inter1)
@@ -481,7 +581,8 @@ class ElectronicStructureTZ:
         """QASM circuit for exp(i * angle * T_pqx T_rsx), non-overlapping case.
 
         Requires p<q<r<s (or r<s<p<q). Same structure as opposite-spin TT.
-        Cost: 2(d1 + d2) + 6 entangling gates (d1=|q-p|, d2=|s-r|).
+        d1=d2=1: xxyy_zbasis on both pairs + 4 RZZ (8 entangling).
+        Otherwise: Bell + parity tree + diagonal_4rot (2(d1+d2)+6 entangling).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -490,12 +591,24 @@ class ElectronicStructureTZ:
         qs = _q(s_orb, x, n, offset)
         d1 = abs(qq - qp)
         d2 = abs(qs - qr)
+
+        if d1 == 1 and d2 == 1:
+            s = ""
+            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+            s += f"xxyy_zbasis q[{qr}],q[{qs}];\n"
+            s += f"rzz({-angle/2}) q[{qp}],q[{qr}];\n"
+            s += f"rzz({-angle/2}) q[{qp}],q[{qs}];\n"
+            s += f"rzz({-angle/2}) q[{qq}],q[{qr}];\n"
+            s += f"rzz({-angle/2}) q[{qq}],q[{qs}];\n"
+            s += f"xxyy_zbasis_inv q[{qr}],q[{qs}];\n"
+            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+            return s
+
         sign1 = 1 if qq > qp else -1
         sign2 = 1 if qs > qr else -1
         inter1 = [qp + sign1 * i for i in range(1, d1)]
         inter2 = [qr + sign2 * i for i in range(1, d2)]
         a = angle / 4
-
 
         s = ""
         s += _qasm_parity_tree(inter1)
@@ -530,6 +643,7 @@ class ElectronicStructureTZ:
         X<->Y swap on the two inner qubits aligns (p,q) and (r,s) as
         simultaneous XX/YY. Z-strings partially cancel, leaving
         intermediates a+1..c-1 and b+1..d-1 where a<c<b<d.
+        Minimum case (no outer intermediates): xxyy_zbasis + 4 RZZ (8 entangling).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -545,7 +659,22 @@ class ElectronicStructureTZ:
         inter2 = list(range(qb + 1, qd))
         a = angle / 4
 
-
+        if len(inter1) == 0 and len(inter2) == 0:
+            s = ""
+            s += _qasm_xy_swap(qa)
+            s += _qasm_xy_swap(qc)
+            s += f"xxyy_zbasis q[{qa}],q[{qb}];\n"
+            s += f"xxyy_zbasis q[{qc}],q[{qd}];\n"
+            # target = (Z_b Z_c - Z_a Z_c - Z_b Z_d + Z_a Z_d)/4
+            s += f"rzz({-angle/2}) q[{qa}],q[{qd}];\n"   # +Z_a Z_d
+            s += f"rzz({angle/2}) q[{qa}],q[{qc}];\n"    # -Z_a Z_c
+            s += f"rzz({angle/2}) q[{qb}],q[{qd}];\n"    # -Z_b Z_d
+            s += f"rzz({-angle/2}) q[{qb}],q[{qc}];\n"   # +Z_b Z_c
+            s += f"xxyy_zbasis_inv q[{qc}],q[{qd}];\n"
+            s += f"xxyy_zbasis_inv q[{qa}],q[{qb}];\n"
+            s += _qasm_xy_swap(qc)
+            s += _qasm_xy_swap(qa)
+            return s
 
         s = ""
         s += _qasm_xy_swap(qa)
@@ -585,6 +714,7 @@ class ElectronicStructureTZ:
         in the overlap region, leaving segments a+1..b-1 and c+1..d-1 where
         (a,d) is the outer pair and (b,c) is the inner pair. Both parity trees
         add to qubit a. No X<->Y swap needed (pairs already matched as XX/YY).
+        Minimum case (no outer intermediates): xxyy_zbasis + 4 RZZ (8 entangling).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -600,7 +730,18 @@ class ElectronicStructureTZ:
         inter2 = list(range(qc + 1, qd))
         a = angle / 4
 
-
+        if len(inter1) == 0 and len(inter2) == 0:
+            s = ""
+            s += f"xxyy_zbasis q[{qa}],q[{qd}];\n"
+            s += f"xxyy_zbasis q[{qb}],q[{qc}];\n"
+            # target = -(Z_a + Z_d)(Z_b + Z_c)/4 = -(Z_a Z_b + Z_a Z_c + Z_b Z_d + Z_c Z_d)/4
+            s += f"rzz({angle/2}) q[{qa}],q[{qb}];\n"
+            s += f"rzz({angle/2}) q[{qa}],q[{qc}];\n"
+            s += f"rzz({angle/2}) q[{qb}],q[{qd}];\n"
+            s += f"rzz({angle/2}) q[{qc}],q[{qd}];\n"
+            s += f"xxyy_zbasis_inv q[{qb}],q[{qc}];\n"
+            s += f"xxyy_zbasis_inv q[{qa}],q[{qd}];\n"
+            return s
 
         s = ""
         s += _qasm_parity_tree(inter1)

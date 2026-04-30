@@ -342,6 +342,11 @@ class ElectronicStructure(Hamiltonian):
     def to_MajoranaPair(self):
         return MajoranaPair(h0=self.h0, h1e=self.h1e, h2e=self.h2e)
 
+    def to_ElectronicStructureTZ(self):
+        from champy.ElectronicStructureTZ import ElectronicStructureTZ
+
+        return ElectronicStructureTZ(h0=self.h0, h1e=self.h1e, h2e=self.h2e)
+
     def sum_pauli_coeffs(self) -> float:
         """
         Compute the sum of absolute values of Pauli coefficients after the Jordan-Wigner mapping.
