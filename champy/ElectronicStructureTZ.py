@@ -23,6 +23,48 @@ gate xyswap q0 {
     h q0;
     rx(-pi/2) q0;
 }
+gate cry(theta) c, t {
+    sdg t;
+    h t;
+    rzz(-theta/2) c, t;
+    h t;
+    s t;
+    ry(theta/2) t;
+}
+gate z_xxyy(theta) qr, q0, q1 {
+    s q0;
+    ry(pi/2) q1;
+    cx q1, q0;
+    ry(theta) q0;
+    ry(theta) q1;
+    cry(-2*theta) qr, q0;
+    cry(-2*theta) qr, q1;
+    cx q1, q0;
+    sdg q0;
+    ry(-pi/2) q1;
+}
+gate xxyy_zbasis q0, q1 {
+    s q0;
+    ry(pi/2) q1;
+    cx q1, q0;
+    sdg q0;
+    h q0;
+    s q0;
+    sdg q1;
+    h q1;
+    s q1;
+}
+gate xxyy_zbasis_inv q0, q1 {
+    sdg q1;
+    h q1;
+    s q1;
+    sdg q0;
+    h q0;
+    s q0;
+    cx q1, q0;
+    ry(-pi/2) q1;
+    sdg q0;
+}
 """
 
 
@@ -269,7 +311,7 @@ class ElectronicStructureTZ:
         """QASM circuit for exp(i * angle * T_pqx), where T_pq = (XX+YY)/2.
 
         d=1: Givens gate (2 entangling gates).
-        d>=2: Bell basis + parity tree (2d+1 entangling gates).
+        d>=2: parity tree + z_xxyy (2d entangling gates).
         Requires QASM_GATE_DEFS to be prepended to the program.
         """
         _q = ElectronicStructureTZ._qubit
@@ -285,12 +327,10 @@ class ElectronicStructureTZ:
 
         s = ""
         s += _qasm_parity_tree(inter)
-        s += _qasm_bell(qp, qq)
-        s += f"cx q[{m}],q[{qp}];\n"
-        s += f"rz({-angle}) q[{qp}];\n"
-        s += f"rzz({angle}) q[{qp}],q[{qq}];\n"
-        s += f"cx q[{m}],q[{qp}];\n"
-        s += _qasm_bell_inv(qp, qq)
+        s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qp}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qq}];\n"
+        s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
         s += _qasm_parity_tree_inv(inter)
         return s
 
@@ -300,27 +340,34 @@ class ElectronicStructureTZ:
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqx Z_ry) with y != x.
 
-        Cost: 2d+3 entangling gates (d = |q-p|, d >= 2).
+        d=1: xxyy_zbasis + 2 RZZ on (r, p) and (r, q) (4 entangling gates).
+        d>=2: parity tree + Z_r XOR + xxyy_zbasis + 2 RZZ + undo (2d+2 entangling gates).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
         qq = _q(q, x, n, offset)
         qr = _q(r, 1 - x, n, offset)
         d = abs(qq - qp)
+        if d == 1:
+            s = ""
+            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+            s += f"rzz({angle}) q[{qr}],q[{qp}];\n"
+            s += f"rzz({angle}) q[{qr}],q[{qq}];\n"
+            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+            return s
+
         sign = 1 if qq > qp else -1
         inter = [qp + sign * i for i in range(1, d)]
         m = inter[0]
 
         s = ""
         s += _qasm_parity_tree(inter)
-        s += _qasm_bell(qp, qq)
-        s += f"cx q[{m}],q[{qp}];\n"
-        s += f"cx q[{qr}],q[{qp}];\n"
-        s += f"rz({-angle}) q[{qp}];\n"
-        s += f"rzz({angle}) q[{qp}],q[{qq}];\n"
-        s += f"cx q[{qr}],q[{qp}];\n"
-        s += f"cx q[{m}],q[{qp}];\n"
-        s += _qasm_bell_inv(qp, qq)
+        s += f"cx q[{qr}],q[{m}];\n"
+        s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qp}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qq}];\n"
+        s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+        s += f"cx q[{qr}],q[{m}];\n"
         s += _qasm_parity_tree_inv(inter)
         return s
 
@@ -331,9 +378,10 @@ class ElectronicStructureTZ:
         """QASM circuit for exp(i * angle * T_pqx Z_rx) with r not in {p,q}.
 
         Cases:
-        - r outside [p,q]: same as opposite-spin case, 2d+3 entangling gates.
-        - r inside (p,q) with d=2: Givens gate (2 entangling gates).
-        - r inside (p,q) with d>=3: skip r in parity tree, 2(d-1) entangling gates.
+        - r outside [p,q], d=1: xxyy_zbasis + 2 RZZ on (r, p) and (r, q) (4 entangling gates).
+        - r outside [p,q], d>=2: parity tree + Z_r XOR + xxyy_zbasis + 2 RZZ (2d+2 entangling gates).
+        - r inside (p,q), d=2: Givens gate (2 entangling gates).
+        - r inside (p,q), d>=3: parity tree excluding r + xxyy_zbasis + 2 RZZ (2(d-1) entangling gates).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -343,21 +391,24 @@ class ElectronicStructureTZ:
         sign = 1 if qq > qp else -1
         r_inside = (min(qp, qq) < qr < max(qp, qq))
 
-
-
         if not r_inside:
+            if d == 1:
+                s = ""
+                s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+                s += f"rzz({angle}) q[{qr}],q[{qp}];\n"
+                s += f"rzz({angle}) q[{qr}],q[{qq}];\n"
+                s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+                return s
             inter = [qp + sign * i for i in range(1, d)]
             m = inter[0]
             s = ""
             s += _qasm_parity_tree(inter)
-            s += _qasm_bell(qp, qq)
-            s += f"cx q[{m}],q[{qp}];\n"
-            s += f"cx q[{qr}],q[{qp}];\n"
-            s += f"rz({-angle}) q[{qp}];\n"
-            s += f"rzz({angle}) q[{qp}],q[{qq}];\n"
-            s += f"cx q[{qr}],q[{qp}];\n"
-            s += f"cx q[{m}],q[{qp}];\n"
-            s += _qasm_bell_inv(qp, qq)
+            s += f"cx q[{qr}],q[{m}];\n"
+            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+            s += f"rzz({angle}) q[{m}],q[{qp}];\n"
+            s += f"rzz({angle}) q[{m}],q[{qq}];\n"
+            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+            s += f"cx q[{qr}],q[{m}];\n"
             s += _qasm_parity_tree_inv(inter)
             return s
 
@@ -370,12 +421,10 @@ class ElectronicStructureTZ:
         m = inter[0]
         s = ""
         s += _qasm_parity_tree(inter)
-        s += _qasm_bell(qp, qq)
-        s += f"cx q[{m}],q[{qp}];\n"
-        s += f"rz({-angle}) q[{qp}];\n"
-        s += f"rzz({angle}) q[{qp}],q[{qq}];\n"
-        s += f"cx q[{m}],q[{qp}];\n"
-        s += _qasm_bell_inv(qp, qq)
+        s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qp}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qq}];\n"
+        s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
         s += _qasm_parity_tree_inv(inter)
         return s
 

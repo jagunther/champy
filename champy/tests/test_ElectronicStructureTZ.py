@@ -85,7 +85,7 @@ def test_t_circuit(d):
 
 
 @pytest.mark.parametrize(
-    "p,q,r,x", [(1, 3, 2, 0), (1, 4, 1, 0), (2, 4, 3, 1), (1, 3, 4, 0)]
+    "p,q,r,x", [(1, 2, 1, 0), (1, 3, 2, 0), (1, 4, 1, 0), (2, 4, 3, 1), (1, 3, 4, 0)]
 )
 def test_tz_opp_circuit(p, q, r, x):
     from scipy.linalg import expm
@@ -107,6 +107,8 @@ def test_tz_opp_circuit(p, q, r, x):
 @pytest.mark.parametrize(
     "p,q,r,x",
     [
+        (1, 2, 3, 0),  # d=1, r after q
+        (2, 3, 1, 0),  # d=1, r before p
         (1, 3, 2, 0),  # r inside, d=2 (Givens)
         (1, 4, 2, 0),  # r inside, d=3
         (1, 4, 3, 0),  # r inside, d=3
