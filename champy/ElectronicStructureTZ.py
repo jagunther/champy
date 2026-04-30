@@ -108,16 +108,6 @@ gate xxyy_zbasis_inv q0, q1 {
 """
 
 
-def _qasm_bell(control: int, target: int) -> str:
-    """QASM for Bell basis transform: CNOT then H on control."""
-    return f"cx q[{control}],q[{target}];\nh q[{control}];\n"
-
-
-def _qasm_bell_inv(control: int, target: int) -> str:
-    """QASM to undo Bell basis transform."""
-    return f"h q[{control}];\ncx q[{control}],q[{target}];\n"
-
-
 def _qasm_parity_tree(qubits: list[int]) -> str:
     """QASM to XOR qubits[1:] onto qubits[0]."""
     s = ""
@@ -132,29 +122,6 @@ def _qasm_parity_tree_inv(qubits: list[int]) -> str:
     for k in reversed(qubits[1:]):
         s += f"cx q[{k}],q[{qubits[0]}];\n"
     return s
-
-
-def _qasm_diagonal_4rot(target: int, qubits: list[int], angles: list[float]) -> str:
-    """QASM for exp(i(a1 Z_T Z_A + a2 Z_T Z_A Z_B + a3 Z_T Z_A Z_B Z_C + a4 Z_T Z_A Z_C)/2).
-
-    Accumulates parities of qubits A, B, C onto target T via CNOTs,
-    performing Rz after each accumulation step.
-    CNOT sequence: A, B, C, B, A, C (6 CNOTs, 4 Rz).
-    """
-    A, B, C = qubits
-    a1, a2, a3, a4 = angles
-    return (
-        f"cx q[{A}],q[{target}];\n"
-        f"rz({a1}) q[{target}];\n"
-        f"cx q[{B}],q[{target}];\n"
-        f"rz({a2}) q[{target}];\n"
-        f"cx q[{C}],q[{target}];\n"
-        f"rz({a3}) q[{target}];\n"
-        f"cx q[{B}],q[{target}];\n"
-        f"rz({a4}) q[{target}];\n"
-        f"cx q[{A}],q[{target}];\n"
-        f"cx q[{C}],q[{target}];\n"
-    )
 
 
 def _qasm_xy_swap(qubit: int) -> str:
@@ -796,8 +763,10 @@ class ElectronicStructureTZ:
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqu T_rsd).
 
-        d1=d2=1: xxyy_zbasis on both pairs + 4 RZZ (8 entangling gates).
-        d1>=2 or d2>=2: Bell + parity tree + diagonal_4rot (2(d1+d2)+6 entangling).
+        Uses xxyy_zbasis to map (XX+YY)/2 -> -(Z_p+Z_q)/2 on each pair, then
+        absorbs the Z-string parity (if any) onto p and q via CNOTs, and
+        performs 4 RZZ rotations on (p,r), (p,s), (q,r), (q,s).
+        Cost: 8 if d1=d2=1, otherwise 2(d1+d2)+6.
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, 0, n, offset)
@@ -806,43 +775,45 @@ class ElectronicStructureTZ:
         qs = _q(s_orb, 1, n, offset)
         d1 = abs(qq - qp)
         d2 = abs(qs - qr)
-
-        if d1 == 1 and d2 == 1:
-            s = ""
-            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
-            s += f"xxyy_zbasis q[{qr}],q[{qs}];\n"
-            s += f"rzz({-angle/2}) q[{qp}],q[{qr}];\n"
-            s += f"rzz({-angle/2}) q[{qp}],q[{qs}];\n"
-            s += f"rzz({-angle/2}) q[{qq}],q[{qr}];\n"
-            s += f"rzz({-angle/2}) q[{qq}],q[{qs}];\n"
-            s += f"xxyy_zbasis_inv q[{qr}],q[{qs}];\n"
-            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
-            return s
-
         sign1 = 1 if qq > qp else -1
         sign2 = 1 if qs > qr else -1
         inter1 = [qp + sign1 * i for i in range(1, d1)]
         inter2 = [qr + sign2 * i for i in range(1, d2)]
-        m1 = inter1[0]
-        m2 = inter2[0]
-        a = angle / 4
+        # m: combined Z-string accumulator. None if both T's have no Z-string.
+        if inter1 and inter2:
+            m = inter1[0]
+            combine = (inter2[0], inter1[0])
+        elif inter1:
+            m = inter1[0]
+            combine = None
+        elif inter2:
+            m = inter2[0]
+            combine = None
+        else:
+            m = None
+            combine = None
 
         s = ""
         s += _qasm_parity_tree(inter1)
         s += _qasm_parity_tree(inter2)
-        s += _qasm_bell(qp, qq)
-        s += _qasm_bell(qr, qs)
-        # Add parities
-        s += f"cx q[{m1}],q[{qp}];\n"
-        s += f"cx q[{m2}],q[{qr}];\n"
-        s += _qasm_diagonal_4rot(
-            qp, [qr, qs, qq], [-2*a, 2*a, -2*a, 2*a]
-        )
-        # Undo parities
-        s += f"cx q[{m2}],q[{qr}];\n"
-        s += f"cx q[{m1}],q[{qp}];\n"
-        s += _qasm_bell_inv(qr, qs)
-        s += _qasm_bell_inv(qp, qq)
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
+        s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+        s += f"xxyy_zbasis q[{qr}],q[{qs}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qp}];\n"
+            s += f"cx q[{m}],q[{qq}];\n"
+        s += f"rzz({-angle/2}) q[{qp}],q[{qr}];\n"
+        s += f"rzz({-angle/2}) q[{qp}],q[{qs}];\n"
+        s += f"rzz({-angle/2}) q[{qq}],q[{qr}];\n"
+        s += f"rzz({-angle/2}) q[{qq}],q[{qs}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qq}];\n"
+            s += f"cx q[{m}],q[{qp}];\n"
+        s += f"xxyy_zbasis_inv q[{qr}],q[{qs}];\n"
+        s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
         s += _qasm_parity_tree_inv(inter2)
         s += _qasm_parity_tree_inv(inter1)
         return s
@@ -853,9 +824,10 @@ class ElectronicStructureTZ:
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqx T_rsx), non-overlapping case.
 
-        Requires p<q<r<s (or r<s<p<q). Same structure as opposite-spin TT.
-        d1=d2=1: xxyy_zbasis on both pairs + 4 RZZ (8 entangling).
-        Otherwise: Bell + parity tree + diagonal_4rot (2(d1+d2)+6 entangling).
+        Requires p<q<r<s (or r<s<p<q). Uses xxyy_zbasis on each pair, combines
+        Z-string accumulators when both exist, absorbs onto p and q, then
+        performs 4 RZZ rotations on (p,r), (p,s), (q,r), (q,s).
+        Cost: 8 if d1=d2=1, otherwise 2(d1+d2)+6.
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -864,45 +836,44 @@ class ElectronicStructureTZ:
         qs = _q(s_orb, x, n, offset)
         d1 = abs(qq - qp)
         d2 = abs(qs - qr)
-
-        if d1 == 1 and d2 == 1:
-            s = ""
-            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
-            s += f"xxyy_zbasis q[{qr}],q[{qs}];\n"
-            s += f"rzz({-angle/2}) q[{qp}],q[{qr}];\n"
-            s += f"rzz({-angle/2}) q[{qp}],q[{qs}];\n"
-            s += f"rzz({-angle/2}) q[{qq}],q[{qr}];\n"
-            s += f"rzz({-angle/2}) q[{qq}],q[{qs}];\n"
-            s += f"xxyy_zbasis_inv q[{qr}],q[{qs}];\n"
-            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
-            return s
-
         sign1 = 1 if qq > qp else -1
         sign2 = 1 if qs > qr else -1
         inter1 = [qp + sign1 * i for i in range(1, d1)]
         inter2 = [qr + sign2 * i for i in range(1, d2)]
-        a = angle / 4
+        if inter1 and inter2:
+            m = inter1[0]
+            combine = (inter2[0], inter1[0])
+        elif inter1:
+            m = inter1[0]
+            combine = None
+        elif inter2:
+            m = inter2[0]
+            combine = None
+        else:
+            m = None
+            combine = None
 
         s = ""
         s += _qasm_parity_tree(inter1)
         s += _qasm_parity_tree(inter2)
-        s += _qasm_bell(qp, qq)
-        s += _qasm_bell(qr, qs)
-        # Add parities
-        if len(inter1) > 0:
-            s += f"cx q[{inter1[0]}],q[{qp}];\n"
-        if len(inter2) > 0:
-            s += f"cx q[{inter2[0]}],q[{qr}];\n"
-        s += _qasm_diagonal_4rot(
-            qp, [qr, qs, qq], [-2*a, 2*a, -2*a, 2*a]
-        )
-        # Undo parities
-        if len(inter2) > 0:
-            s += f"cx q[{inter2[0]}],q[{qr}];\n"
-        if len(inter1) > 0:
-            s += f"cx q[{inter1[0]}],q[{qp}];\n"
-        s += _qasm_bell_inv(qr, qs)
-        s += _qasm_bell_inv(qp, qq)
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
+        s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+        s += f"xxyy_zbasis q[{qr}],q[{qs}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qp}];\n"
+            s += f"cx q[{m}],q[{qq}];\n"
+        s += f"rzz({-angle/2}) q[{qp}],q[{qr}];\n"
+        s += f"rzz({-angle/2}) q[{qp}],q[{qs}];\n"
+        s += f"rzz({-angle/2}) q[{qq}],q[{qr}];\n"
+        s += f"rzz({-angle/2}) q[{qq}],q[{qs}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qq}];\n"
+            s += f"cx q[{m}],q[{qp}];\n"
+        s += f"xxyy_zbasis_inv q[{qr}],q[{qs}];\n"
+        s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
         s += _qasm_parity_tree_inv(inter2)
         s += _qasm_parity_tree_inv(inter1)
         return s
@@ -911,12 +882,12 @@ class ElectronicStructureTZ:
     def tt_same_interleaved_circuit(
         p: int, q: int, r: int, s_orb: int, x: int, angle: float, n: int, offset: int = 0
     ) -> str:
-        """QASM circuit for exp(i * angle * T_pqx T_rsx), overlapping p<r<q<s or r<p<s<q.
+        """QASM circuit for exp(i * angle * T_pqx T_rsx), interleaved p<r<q<s or r<p<s<q.
 
-        X<->Y swap on the two inner qubits aligns (p,q) and (r,s) as
-        simultaneous XX/YY. Z-strings partially cancel, leaving
-        intermediates a+1..c-1 and b+1..d-1 where a<c<b<d.
-        Minimum case (no outer intermediates): xxyy_zbasis + 4 RZZ (8 entangling).
+        X<->Y swap on the two inner qubits (a,c) aligns the operator into
+        matched XX/YY structure. Then xxyy_zbasis on (a,b) and (c,d), absorb
+        Z-string accumulator onto qa,qb, and 4 RZZ rotations.
+        Cost: 8 if no outer intermediates, otherwise 10 + extra(δ1) + extra(δ2).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -930,47 +901,43 @@ class ElectronicStructureTZ:
             qa, qb, qc, qd = qr, qs, qp, qq
         inter1 = list(range(qa + 1, qc))
         inter2 = list(range(qb + 1, qd))
-        a = angle / 4
-
-        if len(inter1) == 0 and len(inter2) == 0:
-            s = ""
-            s += _qasm_xy_swap(qa)
-            s += _qasm_xy_swap(qc)
-            s += f"xxyy_zbasis q[{qa}],q[{qb}];\n"
-            s += f"xxyy_zbasis q[{qc}],q[{qd}];\n"
-            # target = (Z_b Z_c - Z_a Z_c - Z_b Z_d + Z_a Z_d)/4
-            s += f"rzz({-angle/2}) q[{qa}],q[{qd}];\n"   # +Z_a Z_d
-            s += f"rzz({angle/2}) q[{qa}],q[{qc}];\n"    # -Z_a Z_c
-            s += f"rzz({angle/2}) q[{qb}],q[{qd}];\n"    # -Z_b Z_d
-            s += f"rzz({-angle/2}) q[{qb}],q[{qc}];\n"   # +Z_b Z_c
-            s += f"xxyy_zbasis_inv q[{qc}],q[{qd}];\n"
-            s += f"xxyy_zbasis_inv q[{qa}],q[{qb}];\n"
-            s += _qasm_xy_swap(qc)
-            s += _qasm_xy_swap(qa)
-            return s
+        if inter1 and inter2:
+            m = inter1[0]
+            combine = (inter2[0], inter1[0])
+        elif inter1:
+            m = inter1[0]
+            combine = None
+        elif inter2:
+            m = inter2[0]
+            combine = None
+        else:
+            m = None
+            combine = None
 
         s = ""
         s += _qasm_xy_swap(qa)
         s += _qasm_xy_swap(qc)
         s += _qasm_parity_tree(inter1)
         s += _qasm_parity_tree(inter2)
-        s += _qasm_bell(qa, qb)
-        s += _qasm_bell(qc, qd)
-        # Add parities
-        if len(inter1) > 0:
-            s += f"cx q[{inter1[0]}],q[{qa}];\n"
-        if len(inter2) > 0:
-            s += f"cx q[{inter2[0]}],q[{qc}];\n"
-        s += _qasm_diagonal_4rot(
-            qa, [qc, qb, qd], [2*a, 2*a, 2*a, 2*a]
-        )
-        # Undo parities
-        if len(inter2) > 0:
-            s += f"cx q[{inter2[0]}],q[{qc}];\n"
-        if len(inter1) > 0:
-            s += f"cx q[{inter1[0]}],q[{qa}];\n"
-        s += _qasm_bell_inv(qc, qd)
-        s += _qasm_bell_inv(qa, qb)
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
+        s += f"xxyy_zbasis q[{qa}],q[{qb}];\n"
+        s += f"xxyy_zbasis q[{qc}],q[{qd}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qa}];\n"
+            s += f"cx q[{m}],q[{qb}];\n"
+        # target ~ (Z_a - Z_b)(Z_d - Z_c)/4 = (+Z_aZ_d - Z_aZ_c - Z_bZ_d + Z_bZ_c)/4
+        s += f"rzz({-angle/2}) q[{qa}],q[{qd}];\n"
+        s += f"rzz({angle/2}) q[{qa}],q[{qc}];\n"
+        s += f"rzz({angle/2}) q[{qb}],q[{qd}];\n"
+        s += f"rzz({-angle/2}) q[{qb}],q[{qc}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qb}];\n"
+            s += f"cx q[{m}],q[{qa}];\n"
+        s += f"xxyy_zbasis_inv q[{qc}],q[{qd}];\n"
+        s += f"xxyy_zbasis_inv q[{qa}],q[{qb}];\n"
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
         s += _qasm_parity_tree_inv(inter2)
         s += _qasm_parity_tree_inv(inter1)
         s += _qasm_xy_swap(qc)
@@ -983,11 +950,11 @@ class ElectronicStructureTZ:
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqx T_rsx), nested case p<r<s<q or r<p<q<s.
 
-        The outer pair's Z-string contains both inner qubits. Z-strings cancel
-        in the overlap region, leaving segments a+1..b-1 and c+1..d-1 where
-        (a,d) is the outer pair and (b,c) is the inner pair. Both parity trees
-        add to qubit a. No X<->Y swap needed (pairs already matched as XX/YY).
-        Minimum case (no outer intermediates): xxyy_zbasis + 4 RZZ (8 entangling).
+        The outer pair's Z-string contains both inner qubits. After parity trees
+        on outer intermediates (a+1..b-1) and (c+1..d-1), the Z-string accumulator
+        gets absorbed onto the outer-pair qubits qa, qd. Then xxyy_zbasis on
+        outer (a,d) and inner (b,c), and 4 RZZ rotations connecting outer to inner.
+        Cost: 8 if no outer intermediates, otherwise 10 + extra(δ1) + extra(δ2).
         """
         _q = ElectronicStructureTZ._qubit
         qp = _q(p, x, n, offset)
@@ -1001,41 +968,41 @@ class ElectronicStructureTZ:
             qa, qb, qc, qd = qr, qp, qq, qs
         inter1 = list(range(qa + 1, qb))
         inter2 = list(range(qc + 1, qd))
-        a = angle / 4
-
-        if len(inter1) == 0 and len(inter2) == 0:
-            s = ""
-            s += f"xxyy_zbasis q[{qa}],q[{qd}];\n"
-            s += f"xxyy_zbasis q[{qb}],q[{qc}];\n"
-            # target = -(Z_a + Z_d)(Z_b + Z_c)/4 = -(Z_a Z_b + Z_a Z_c + Z_b Z_d + Z_c Z_d)/4
-            s += f"rzz({angle/2}) q[{qa}],q[{qb}];\n"
-            s += f"rzz({angle/2}) q[{qa}],q[{qc}];\n"
-            s += f"rzz({angle/2}) q[{qb}],q[{qd}];\n"
-            s += f"rzz({angle/2}) q[{qc}],q[{qd}];\n"
-            s += f"xxyy_zbasis_inv q[{qb}],q[{qc}];\n"
-            s += f"xxyy_zbasis_inv q[{qa}],q[{qd}];\n"
-            return s
+        if inter1 and inter2:
+            m = inter1[0]
+            combine = (inter2[0], inter1[0])
+        elif inter1:
+            m = inter1[0]
+            combine = None
+        elif inter2:
+            m = inter2[0]
+            combine = None
+        else:
+            m = None
+            combine = None
 
         s = ""
         s += _qasm_parity_tree(inter1)
         s += _qasm_parity_tree(inter2)
-        s += _qasm_bell(qa, qd)
-        s += _qasm_bell(qb, qc)
-        # Add parities (both to qa)
-        if len(inter1) > 0:
-            s += f"cx q[{inter1[0]}],q[{qa}];\n"
-        if len(inter2) > 0:
-            s += f"cx q[{inter2[0]}],q[{qa}];\n"
-        s += _qasm_diagonal_4rot(
-            qa, [qb, qc, qd], [2*a, -2*a, 2*a, -2*a]
-        )
-        # Undo parities
-        if len(inter2) > 0:
-            s += f"cx q[{inter2[0]}],q[{qa}];\n"
-        if len(inter1) > 0:
-            s += f"cx q[{inter1[0]}],q[{qa}];\n"
-        s += _qasm_bell_inv(qb, qc)
-        s += _qasm_bell_inv(qa, qd)
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
+        s += f"xxyy_zbasis q[{qa}],q[{qd}];\n"
+        s += f"xxyy_zbasis q[{qb}],q[{qc}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qa}];\n"
+            s += f"cx q[{m}],q[{qd}];\n"
+        # target ~ -(Z_a + Z_d)(Z_b + Z_c)/4 = -(Z_aZ_b + Z_aZ_c + Z_bZ_d + Z_cZ_d)/4
+        s += f"rzz({angle/2}) q[{qa}],q[{qb}];\n"
+        s += f"rzz({angle/2}) q[{qa}],q[{qc}];\n"
+        s += f"rzz({angle/2}) q[{qb}],q[{qd}];\n"
+        s += f"rzz({angle/2}) q[{qc}],q[{qd}];\n"
+        if m is not None:
+            s += f"cx q[{m}],q[{qd}];\n"
+            s += f"cx q[{m}],q[{qa}];\n"
+        s += f"xxyy_zbasis_inv q[{qb}],q[{qc}];\n"
+        s += f"xxyy_zbasis_inv q[{qa}],q[{qd}];\n"
+        if combine is not None:
+            s += f"cx q[{combine[0]}],q[{combine[1]}];\n"
         s += _qasm_parity_tree_inv(inter2)
         s += _qasm_parity_tree_inv(inter1)
         return s

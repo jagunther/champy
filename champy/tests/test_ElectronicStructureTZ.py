@@ -134,7 +134,7 @@ def test_tz_same_circuit(p, q, r, x):
 
 
 @pytest.mark.parametrize(
-    "p,q,r,s", [(1, 3, 1, 3), (1, 4, 1, 3), (1, 3, 2, 4)]
+    "p,q,r,s", [(1, 2, 1, 2), (1, 2, 1, 3), (1, 3, 1, 2), (1, 3, 1, 3), (1, 4, 1, 3), (1, 3, 2, 4)]
 )
 def test_tt_opp_circuit(p, q, r, s):
     from scipy.linalg import expm
@@ -158,6 +158,7 @@ def test_tt_opp_circuit(p, q, r, s):
     "p,q,r,s",
     [
         (1, 2, 3, 4),  # non-overlapping, d1=1, d2=1
+        (1, 2, 3, 5),  # non-overlapping, d1=1, d2=2
         (1, 3, 4, 6),  # non-overlapping, d1=2, d2=2
         (1, 3, 4, 5),  # non-overlapping, d1=2, d2=1
     ],
