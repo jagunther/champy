@@ -243,20 +243,26 @@ class ElectronicStructureTZ:
         return self._constant
 
     def __add__(self, other):
-        assert isinstance(other, ElectronicStructureTZ) and self.num_orb == other.num_orb
+        assert (
+            isinstance(other, ElectronicStructureTZ) and self.num_orb == other.num_orb
+        )
         return ElectronicStructureTZ(
             self.h0 + other.h0, self.h1e + other.h1e, self.h2e + other.h2e
         )
 
     def __sub__(self, other):
-        assert isinstance(other, ElectronicStructureTZ) and self.num_orb == other.num_orb
+        assert (
+            isinstance(other, ElectronicStructureTZ) and self.num_orb == other.num_orb
+        )
         return ElectronicStructureTZ(
             self.h0 - other.h0, self.h1e - other.h1e, self.h2e - other.h2e
         )
 
     def __mul__(self, other):
         assert isinstance(other, (int, float))
-        return ElectronicStructureTZ(other * self.h0, other * self.h1e, other * self.h2e)
+        return ElectronicStructureTZ(
+            other * self.h0, other * self.h1e, other * self.h2e
+        )
 
     __rmul__ = __mul__
 
@@ -275,17 +281,19 @@ class ElectronicStructureTZ:
         return ElectronicStructureTZ._one_norm(self.h1e, self.h2e)
 
     @staticmethod
-    def _one_norm(h1e: np.ndarray, h2e: np.ndarray) -> float:
+    def _one_norm(h1e, h2e):
+        import jax.numpy as jnp
+
         c = ElectronicStructureTZ._coefficients(h1e, h2e)
         return (
-            np.sum(np.abs(c["Z"])) * 2
-            + np.sum(np.abs(c["T"])) * 2
-            + np.sum(np.abs(c["ZZ_same"])) * 2
-            + np.sum(np.abs(c["ZZ_opp"]))
-            + np.sum(np.abs(c["TZ_opp"])) * 2
-            + np.sum(np.abs(c["TZ_same"])) * 2
-            + np.sum(np.abs(c["TT_same"])) * 2
-            + np.sum(np.abs(c["TT_opp"]))
+            jnp.sum(jnp.abs(c["Z"])) * 2
+            + jnp.sum(jnp.abs(c["T"])) * 2
+            + jnp.sum(jnp.abs(c["ZZ_same"])) * 2
+            + jnp.sum(jnp.abs(c["ZZ_opp"]))
+            + jnp.sum(jnp.abs(c["TZ_opp"])) * 2
+            + jnp.sum(jnp.abs(c["TZ_same"])) * 2
+            + jnp.sum(jnp.abs(c["TT_same"])) * 2
+            + jnp.sum(jnp.abs(c["TT_opp"]))
         )
 
     @staticmethod
@@ -412,7 +420,9 @@ class ElectronicStructureTZ:
                             continue
                         cost_TT_opp[p, q, r, s] = self.tt_opp_circuit_cost(p, q, r, s)
                         if len({p, q, r, s}) == 4:
-                            cost_TT_same[p, q, r, s] = self.tt_same_circuit_cost(p, q, r, s)
+                            cost_TT_same[p, q, r, s] = self.tt_same_circuit_cost(
+                                p, q, r, s
+                            )
         self._cost_tensors = {
             "Z": self.z_circuit_cost(),
             "ZZ": self.zz_circuit_cost(),
@@ -563,7 +573,9 @@ class ElectronicStructureTZ:
                 circle = plt.Circle(
                     pos[p],
                     0.07,
-                    facecolor=cmap(norm(diag_vals[p])) if diag_vals[p] > 0 else "lightgrey",
+                    facecolor=(
+                        cmap(norm(diag_vals[p])) if diag_vals[p] > 0 else "lightgrey"
+                    ),
                     edgecolor="black",
                     linewidth=1.5,
                     zorder=3,
@@ -634,9 +646,7 @@ class ElectronicStructureTZ:
         return f"rzz({-2 * angle}) q[{q0}],q[{q1}];\n"
 
     @staticmethod
-    def t_circuit(
-        p: int, q: int, x: int, angle: float, n: int, offset: int = 0
-    ) -> str:
+    def t_circuit(p: int, q: int, x: int, angle: float, n: int, offset: int = 0) -> str:
         """QASM circuit for exp(i * angle * T_pqx), where T_pq = (XX+YY)/2.
 
         d=1: Givens gate (2 entangling gates).
@@ -718,7 +728,7 @@ class ElectronicStructureTZ:
         qr = _q(r, x, n, offset)
         d = abs(qq - qp)
         sign = 1 if qq > qp else -1
-        r_inside = (min(qp, qq) < qr < max(qp, qq))
+        r_inside = min(qp, qq) < qr < max(qp, qq)
 
         if not r_inside:
             if d == 1:
@@ -756,6 +766,107 @@ class ElectronicStructureTZ:
         s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
         s += _qasm_parity_tree_inv(inter)
         return s
+
+    @staticmethod
+    def _t_zstring_circuit(
+        qp: int, qq: int, eff_qubits: list[int], angle: float
+    ) -> str:
+        """QASM for exp(i*angle * T_{qp,qq} · Π_{k∈eff} Z_k) given absolute qubit indices.
+
+        Uses the same xxyy_zbasis pattern as t_circuit / tz_*_circuit:
+        accumulate parity of `eff_qubits` onto eff_qubits[0], change to Z basis on
+        (qp,qq), apply 2 RZZ to that accumulator, undo. eff_qubits must be disjoint
+        from {qp, qq}. If empty, the (XX+YY)/2 piece becomes -(Z_p+Z_q)/2 and we
+        apply two single-qubit Rz instead. Cost: 2 if eff is empty, else 2*len+2.
+        """
+        s = ""
+        if not eff_qubits:
+            s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+            s += f"rz({angle}) q[{qp}];\n"
+            s += f"rz({angle}) q[{qq}];\n"
+            s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+            return s
+        m = eff_qubits[0]
+        for k in eff_qubits[1:]:
+            s += f"cx q[{k}],q[{m}];\n"
+        s += f"xxyy_zbasis q[{qp}],q[{qq}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qp}];\n"
+        s += f"rzz({angle}) q[{m}],q[{qq}];\n"
+        s += f"xxyy_zbasis_inv q[{qp}],q[{qq}];\n"
+        for k in reversed(eff_qubits[1:]):
+            s += f"cx q[{k}],q[{m}];\n"
+        return s
+
+    @staticmethod
+    def tzz_same_circuit(
+        p: int,
+        q: int,
+        r: int,
+        s_orb: int,
+        x: int,
+        angle: float,
+        n: int,
+        offset: int = 0,
+    ) -> str:
+        """QASM for exp(i*angle * T_pqx Z_rx Z_sx) with {p,q} ∩ {r,s} = ∅.
+
+        Effective Z-string: symmetric difference of (intermediates of (p,q))
+        and {q_r, q_s}. r or s inside the (p,q) interval cancels with the
+        JW string.
+        """
+        _q = ElectronicStructureTZ._qubit
+        qp = _q(p, x, n, offset)
+        qq = _q(q, x, n, offset)
+        qr = _q(r, x, n, offset)
+        qs = _q(s_orb, x, n, offset)
+        d = abs(qq - qp)
+        sign = 1 if qq > qp else -1
+        inter_set = set(qp + sign * i for i in range(1, d))
+        eff = sorted(inter_set ^ {qr, qs})
+        return ElectronicStructureTZ._t_zstring_circuit(qp, qq, eff, angle)
+
+    @staticmethod
+    def tzz_opp_circuit(
+        p: int,
+        q: int,
+        r: int,
+        s_orb: int,
+        x: int,
+        angle: float,
+        n: int,
+        offset: int = 0,
+    ) -> str:
+        """QASM for exp(i*angle * T_pqx Z_r^(1-x) Z_s^(1-x)).
+
+        (p,q) on spin x; (r,s) on the opposite spin (no qubit overlap with
+        intermediates), so the effective string is the union of intermediates
+        and {q_r, q_s}.
+        """
+        _q = ElectronicStructureTZ._qubit
+        qp = _q(p, x, n, offset)
+        qq = _q(q, x, n, offset)
+        qr = _q(r, 1 - x, n, offset)
+        qs = _q(s_orb, 1 - x, n, offset)
+        d = abs(qq - qp)
+        sign = 1 if qq > qp else -1
+        inter_set = set(qp + sign * i for i in range(1, d))
+        eff = sorted(inter_set | {qr, qs})
+        return ElectronicStructureTZ._t_zstring_circuit(qp, qq, eff, angle)
+
+    @staticmethod
+    def tzz_same_circuit_cost(p: int, q: int, r: int, s_orb: int) -> int:
+        """Cost of tzz_same_circuit. Eff size = d+1 - 2·(# of {r,s} inside (p,q))."""
+        d = abs(q - p)
+        lo, hi = min(p, q), max(p, q)
+        inside = (1 if lo < r < hi else 0) + (1 if lo < s_orb < hi else 0)
+        eff_size = d + 1 - 2 * inside
+        return 2 if eff_size == 0 else 2 * eff_size + 2
+
+    @staticmethod
+    def tzz_opp_circuit_cost(p: int, q: int) -> int:
+        """Cost of tzz_opp_circuit. Eff size = (d-1) + 2 = d+1."""
+        d = abs(q - p)
+        return 2 * (d + 1) + 2
 
     @staticmethod
     def tt_opp_circuit(
@@ -820,7 +931,14 @@ class ElectronicStructureTZ:
 
     @staticmethod
     def tt_same_nonoverlap_circuit(
-        p: int, q: int, r: int, s_orb: int, x: int, angle: float, n: int, offset: int = 0
+        p: int,
+        q: int,
+        r: int,
+        s_orb: int,
+        x: int,
+        angle: float,
+        n: int,
+        offset: int = 0,
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqx T_rsx), non-overlapping case.
 
@@ -880,7 +998,14 @@ class ElectronicStructureTZ:
 
     @staticmethod
     def tt_same_interleaved_circuit(
-        p: int, q: int, r: int, s_orb: int, x: int, angle: float, n: int, offset: int = 0
+        p: int,
+        q: int,
+        r: int,
+        s_orb: int,
+        x: int,
+        angle: float,
+        n: int,
+        offset: int = 0,
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqx T_rsx), interleaved p<r<q<s or r<p<s<q.
 
@@ -946,7 +1071,14 @@ class ElectronicStructureTZ:
 
     @staticmethod
     def tt_same_nested_circuit(
-        p: int, q: int, r: int, s_orb: int, x: int, angle: float, n: int, offset: int = 0
+        p: int,
+        q: int,
+        r: int,
+        s_orb: int,
+        x: int,
+        angle: float,
+        n: int,
+        offset: int = 0,
     ) -> str:
         """QASM circuit for exp(i * angle * T_pqx T_rsx), nested case p<r<s<q or r<p<q<s.
 
@@ -1006,6 +1138,17 @@ class ElectronicStructureTZ:
         s += _qasm_parity_tree_inv(inter2)
         s += _qasm_parity_tree_inv(inter1)
         return s
+
+    def to_ElectronicStructureSZ(self) -> "ElectronicStructureSZ":
+        """Build the SZ representation from this Hamiltonian's h0, h1e, h2e.
+
+        ElectronicStructureSZ.__init__ derives all SZ coefficients directly
+        from the integrals via the T_pq = S_pq - (I + Z_p Z_q)/2 substitution
+        (see memory:project_sz_decomposition.md).
+        """
+        from champy.ElectronicStructureSZ import ElectronicStructureSZ
+
+        return ElectronicStructureSZ(self.h0, self.h1e, self.h2e)
 
     def to_pauli_hamiltonian(self) -> PauliHamiltonian:
         n = self.num_orb
@@ -1070,9 +1213,7 @@ class ElectronicStructureTZ:
                     continue
                 for spin_offset in [0, n]:
                     labels.append(
-                        _pauli_label(
-                            {p + spin_offset: "Z", q + spin_offset: "Z"}
-                        )
+                        _pauli_label({p + spin_offset: "Z", q + spin_offset: "Z"})
                     )
                     weights.append(c)
 
