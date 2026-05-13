@@ -3,7 +3,6 @@ from champy.PauliHamiltonian import PauliHamiltonian
 import functools
 import numpy as np
 import scipy.sparse
-import matplotlib.pyplot as plt
 
 
 @functools.lru_cache(maxsize=16)
@@ -271,101 +270,6 @@ class MajoranaPair(Hamiltonian):
             return None
         return MajoranaPair(h0=0, h1e=self.h1e[ix], h2e=self.h2e[ix4])
 
-    def plot_orbital_graph(self, optimize_jw: bool = False) -> None:
-        """Plot the orbital graph for the spin-↑ sector using a spring layout.
-
-        Edge weights drive the spring forces: heavier edges pull nodes closer.
-        Γ_pp → vertex p  (color proportional to weight)
-        Γ_pq → undirected edge  (color proportional to weight)
-
-        :param optimize_jw: if True, compute and display the optimal JW ordering
-                            instead of the default 0,1,...,n-1.
-        """
-        import networkx as nx
-        import matplotlib.colors as mcolors
-        import matplotlib.colorbar as mcolorbar
-
-        n = self.num_orb
-        w = self.majoranapair_weights()[:, :, 0]
-
-        cmap = plt.colormaps["Blues"]
-        diag_vals = w[np.arange(n), np.arange(n)]
-        nonzero = w[w > 0]
-        norm = mcolors.LogNorm(vmin=nonzero.min(), vmax=w.max())
-
-        # Build graph with edge weights and compute layout
-        G = nx.Graph()
-        G.add_nodes_from(range(n))
-        for p in range(n):
-            for q in range(p + 1, n):
-                if w[p, q] > 1e-6 * w.max():
-                    G.add_edge(p, q, weight=w[p, q])
-        pos = nx.spring_layout(G, weight="weight", seed=42)
-
-        # JW orderings to display
-        jw_orderings = [("JW default", np.arange(n), "red")]
-        if optimize_jw:
-            jw_orderings.append(("JW optimized", self.optimize_jw_ordering(), "green"))
-
-        n_cols = 1 + len(jw_orderings)
-        fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
-        fig.subplots_adjust(right=0.88)
-
-        def _draw_vertices(ax):
-            for p in range(n):
-                circle = plt.Circle(
-                    pos[p],
-                    0.07,
-                    facecolor=cmap(norm(diag_vals[p])),
-                    edgecolor="black",
-                    linewidth=1.5,
-                    zorder=3,
-                )
-                ax.add_patch(circle)
-                r, g, b, _ = cmap(norm(diag_vals[p]))
-                luminance = 0.299 * r + 0.587 * g + 0.114 * b
-                ax.text(
-                    *pos[p],
-                    str(p),
-                    ha="center",
-                    va="center",
-                    fontsize=13,
-                    fontweight="bold",
-                    zorder=4,
-                    color="white" if luminance < 0.5 else "black",
-                )
-            ax.set_aspect("equal")
-            ax.axis("off")
-            ax.autoscale_view()
-
-        # ── Left: orbital interaction graph ──────────────────────────────────
-        ax = axes[0]
-        for p, q in G.edges():
-            xs = [pos[p][0], pos[q][0]]
-            ys = [pos[p][1], pos[q][1]]
-            ax.plot(xs, ys, color=cmap(norm(w[p, q])), lw=2, zorder=1)
-        _draw_vertices(ax)
-        ax.set_title(
-            "Orbital graph (spin-↑)\n" r"$\Gamma_{pp}$ → vertex,  $\Gamma_{pq}$ → edge",
-            fontsize=10,
-        )
-
-        # ── Right: one subplot per JW ordering ───────────────────────────────
-        for ax, (title, perm, color) in zip(axes[1:], jw_orderings):
-            cost = self.jw_cost(perm)
-            for i in range(n - 1):
-                xs = [pos[perm[i]][0], pos[perm[i + 1]][0]]
-                ys = [pos[perm[i]][1], pos[perm[i + 1]][1]]
-                ax.plot(xs, ys, color=color, lw=2, zorder=1)
-            _draw_vertices(ax)
-            ax.set_title(f"{title}\ncost = {cost:.3f}", fontsize=10)
-
-        # Shared colorbar
-        cax = fig.add_axes([0.91, 0.15, 0.02, 0.7])
-        mcolorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation="vertical")
-        cax.set_title(r"$w$", fontsize=10)
-
-        plt.show()
 
     def jw_matrix(self):
         """Build (lazily) the linear map M from Majorana coefficients to Pauli coefficients.

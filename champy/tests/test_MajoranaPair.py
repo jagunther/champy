@@ -25,10 +25,12 @@ def _f2q_valid(elstruc: ElectronicStructure, pauli_hamil: PauliHamiltonian):
 
 @pytest.mark.parametrize("hamil_random", [(4, 4)], indirect=True)
 def test_plot_orbital_graph(hamil_random):
-    """plot_orbital_graph() runs without error on a random Hamiltonian."""
+    """plot_orbital_graph_majorana() runs without error on a random Hamiltonian."""
+    from champy import visualization
+
     majorana = hamil_random.to_MajoranaPair()
     with patch("matplotlib.pyplot.show"):
-        result = majorana.plot_orbital_graph()
+        result = visualization.plot_orbital_graph_majorana(majorana)
     assert result is None
 
 

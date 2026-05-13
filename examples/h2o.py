@@ -7,6 +7,7 @@ Demonstrates the main workflow:
 
 import numpy as np
 from pyscf import gto, scf
+from champy import visualization
 from champy.ElectronicStructure import ElectronicStructure
 
 # ── 1. Build ElectronicStructure from H2O / cc-pVDZ ─────────────────────────
@@ -33,11 +34,11 @@ print(f"Nuclear constant : {elstruc.constant:.6f}")
 
 # ── 2. Symmetry detection ────────────────────────────────────────────────────
 print(f"\nOrb symmetries (before ordering) : {elstruc.orb_symmetries}")
-elstruc.plot_orbital_interaction_graph()
+visualization.plot_orbital_interaction_graph(elstruc)
 
 elstruc.symmetry_ordering()
 print(f"Orb symmetries (after ordering)  : {elstruc.orb_symmetries}")
-elstruc.plot_orbital_interaction_graph()
+visualization.plot_orbital_interaction_graph(elstruc)
 
 # ── 3. 1-norm optimisation ───────────────────────────────────────────────────
 import copy
@@ -131,4 +132,4 @@ print(f"Optimized JW cost: {majorana.jw_cost(opt_perm):.4f}")
 print(f"Optimal ordering : {opt_perm}")
 
 # ── 11. Plots ────────────────────────────────────────────────────────────────
-majorana.plot_orbital_graph(optimize_jw=True)
+visualization.plot_orbital_graph_majorana(majorana, optimize_jw=True)

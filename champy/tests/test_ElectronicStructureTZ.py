@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from champy.ElectronicStructure import ElectronicStructure
 from champy.ElectronicStructureTZ import ElectronicStructureTZ
+from champy import circuits
 from champy.PauliHamiltonian import PauliHamiltonian
 
 
@@ -21,7 +22,7 @@ def _f2q_valid(elstruc: ElectronicStructure, pauli_hamil: PauliHamiltonian):
 @pytest.mark.parametrize("hamil_random", [(4, 4)], indirect=True)
 def test_to_pauli_hamiltonian(hamil_random):
     elstruc = hamil_random
-    tz = ElectronicStructureTZ(elstruc.h0, elstruc.h1e, elstruc.h2e)
+    tz = ElectronicStructureTZ(elstruc.h0, elstruc.h1e, elstruc.h2e, elstruc.num_elec)
     pauli_hamil = tz.to_pauli_hamiltonian()
     valid, error = _f2q_valid(elstruc=elstruc, pauli_hamil=pauli_hamil)
     assert valid, f"Eigenvalue {error} not found in Pauli spectrum"
@@ -45,7 +46,7 @@ def _kron(*args):
 def _simulate_qasm(qasm_circuit_str, n_qubits):
     from qiskit import QuantumCircuit
     from qiskit.quantum_info import Operator
-    from champy.ElectronicStructureTZ import QASM_GATE_DEFS
+    from champy.circuits import QASM_GATE_DEFS
 
     qasm_prog = (
         f'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
@@ -76,10 +77,10 @@ def test_t_circuit(d):
     p, q = 1, 1 + d
     n_orb = d + 1
     n_qubits = 2 * n_orb
-    qasm = ElectronicStructureTZ.t_circuit(p, q, 0, angle, n_orb)
+    qasm = circuits.t_circuit(p, q, 0, angle, n_orb)
     circuit = _simulate_qasm(qasm, n_qubits)
-    qp = ElectronicStructureTZ._qubit(p, 0, n_orb, 0)
-    qq = ElectronicStructureTZ._qubit(q, 0, n_orb, 0)
+    qp = circuits.qubit_index(p, 0, n_orb, 0)
+    qq = circuits.qubit_index(q, 0, n_orb, 0)
     target = expm(1j * angle * _t_operator(qp, qq, n_qubits))
     assert np.allclose(circuit, target), f"t_circuit failed for d={d}"
 
@@ -93,11 +94,11 @@ def test_tz_opp_circuit(p, q, r, x):
     angle = 0.3
     n_orb = max(p, q, r) + 1
     n_qubits = 2 * n_orb
-    qasm = ElectronicStructureTZ.tz_opp_circuit(p, q, x, r, angle, n_orb)
+    qasm = circuits.tz_opp_circuit(p, q, x, r, angle, n_orb)
     circuit = _simulate_qasm(qasm, n_qubits)
-    qp = ElectronicStructureTZ._qubit(p, x, n_orb, 0)
-    qq = ElectronicStructureTZ._qubit(q, x, n_orb, 0)
-    qr = ElectronicStructureTZ._qubit(r, 1 - x, n_orb, 0)
+    qp = circuits.qubit_index(p, x, n_orb, 0)
+    qq = circuits.qubit_index(q, x, n_orb, 0)
+    qr = circuits.qubit_index(r, 1 - x, n_orb, 0)
     T = _t_operator(qp, qq, n_qubits)
     Z_r = _kron(*[_Z if i == qr else _I for i in range(n_qubits)])
     target = expm(1j * angle * T @ Z_r)
@@ -122,11 +123,11 @@ def test_tz_same_circuit(p, q, r, x):
     angle = 0.3
     n_orb = max(p, q, r) + 1
     n_qubits = 2 * n_orb
-    qasm = ElectronicStructureTZ.tz_same_circuit(p, q, r, x, angle, n_orb)
+    qasm = circuits.tz_same_circuit(p, q, r, x, angle, n_orb)
     circuit = _simulate_qasm(qasm, n_qubits)
-    qp = ElectronicStructureTZ._qubit(p, x, n_orb, 0)
-    qq = ElectronicStructureTZ._qubit(q, x, n_orb, 0)
-    qr = ElectronicStructureTZ._qubit(r, x, n_orb, 0)
+    qp = circuits.qubit_index(p, x, n_orb, 0)
+    qq = circuits.qubit_index(q, x, n_orb, 0)
+    qr = circuits.qubit_index(r, x, n_orb, 0)
     T = _t_operator(qp, qq, n_qubits)
     Z_r = _kron(*[_Z if i == qr else _I for i in range(n_qubits)])
     target = expm(1j * angle * T @ Z_r)
@@ -142,12 +143,12 @@ def test_tt_opp_circuit(p, q, r, s):
     angle = 0.3
     n_orb = max(p, q, r, s) + 1
     n_qubits = 2 * n_orb
-    qasm = ElectronicStructureTZ.tt_opp_circuit(p, q, r, s, angle, n_orb)
+    qasm = circuits.tt_opp_circuit(p, q, r, s, angle, n_orb)
     circuit = _simulate_qasm(qasm, n_qubits)
-    qp = ElectronicStructureTZ._qubit(p, 0, n_orb, 0)
-    qq = ElectronicStructureTZ._qubit(q, 0, n_orb, 0)
-    qr = ElectronicStructureTZ._qubit(r, 1, n_orb, 0)
-    qs = ElectronicStructureTZ._qubit(s, 1, n_orb, 0)
+    qp = circuits.qubit_index(p, 0, n_orb, 0)
+    qq = circuits.qubit_index(q, 0, n_orb, 0)
+    qr = circuits.qubit_index(r, 1, n_orb, 0)
+    qs = circuits.qubit_index(s, 1, n_orb, 0)
     Tu = _t_operator(qp, qq, n_qubits)
     Td = _t_operator(qr, qs, n_qubits)
     target = expm(1j * angle * Tu @ Td)
@@ -170,7 +171,7 @@ def test_tt_same_nonoverlap_circuit(p, q, r, s):
     x = 0
     n_orb = max(p, q, r, s) + 1
     n_qubits = n_orb
-    qasm = ElectronicStructureTZ.tt_same_nonoverlap_circuit(
+    qasm = circuits.tt_same_nonoverlap_circuit(
         p, q, r, s, x, angle, n_orb
     )
     circuit = _simulate_qasm(qasm, n_qubits)
@@ -202,7 +203,7 @@ def test_tt_same_nested_circuit(p, q, r, s):
     x = 0
     n_orb = max(p, q, r, s) + 1
     n_qubits = n_orb
-    qasm = ElectronicStructureTZ.tt_same_nested_circuit(
+    qasm = circuits.tt_same_nested_circuit(
         p, q, r, s, x, angle, n_orb
     )
     circuit = _simulate_qasm(qasm, n_qubits)
@@ -235,7 +236,7 @@ def test_tt_same_interleaved_circuit(p, q, r, s):
     x = 0
     n_orb = max(p, q, r, s) + 1
     n_qubits = n_orb
-    qasm = ElectronicStructureTZ.tt_same_interleaved_circuit(
+    qasm = circuits.tt_same_interleaved_circuit(
         p, q, r, s, x, angle, n_orb
     )
     circuit = _simulate_qasm(qasm, n_qubits)
@@ -321,18 +322,18 @@ def test_jw_cost_matches_manual_sum(hamil_random):
     pos[perm] = np.arange(n)
 
     expected = 0.0
-    expected += 2.0 * float(np.sum(np.abs(tz.coeff_Z))) * tz.z_circuit_cost()
-    expected += 2.0 * tz.zz_circuit_cost() * float(np.sum(np.abs(tz.coeff_ZZ_same)))
-    expected += tz.zz_circuit_cost() * float(np.sum(np.abs(tz.coeff_ZZ_opp)))
+    expected += 2.0 * float(np.sum(np.abs(tz.coeff_Z))) * circuits.z_circuit_cost()
+    expected += 2.0 * circuits.zz_circuit_cost() * float(np.sum(np.abs(tz.coeff_ZZ_same)))
+    expected += circuits.zz_circuit_cost() * float(np.sum(np.abs(tz.coeff_ZZ_opp)))
     for p in range(n):
         for q in range(n):
-            expected += 2.0 * abs(float(tz.coeff_T[p, q])) * tz.t_circuit_cost(pos[p], pos[q])
+            expected += 2.0 * abs(float(tz.coeff_T[p, q])) * circuits.t_circuit_cost(pos[p], pos[q])
             for r in range(n):
-                expected += 2.0 * abs(float(tz.coeff_TZ_opp[p, q, r])) * tz.tz_opp_circuit_cost(pos[p], pos[q])
-                expected += 2.0 * abs(float(tz.coeff_TZ_same[p, q, r])) * tz.tz_same_circuit_cost(pos[p], pos[q], pos[r])
+                expected += 2.0 * abs(float(tz.coeff_TZ_opp[p, q, r])) * circuits.tz_opp_circuit_cost(pos[p], pos[q])
+                expected += 2.0 * abs(float(tz.coeff_TZ_same[p, q, r])) * circuits.tz_same_circuit_cost(pos[p], pos[q], pos[r])
                 for s in range(n):
-                    expected += abs(float(tz.coeff_TT_opp[p, q, r, s])) * tz.tt_opp_circuit_cost(pos[p], pos[q], pos[r], pos[s])
-                    expected += 2.0 * abs(float(tz.coeff_TT_same[p, q, r, s])) * tz.tt_same_circuit_cost(pos[p], pos[q], pos[r], pos[s])
+                    expected += abs(float(tz.coeff_TT_opp[p, q, r, s])) * circuits.tt_opp_circuit_cost(pos[p], pos[q], pos[r], pos[s])
+                    expected += 2.0 * abs(float(tz.coeff_TT_same[p, q, r, s])) * circuits.tt_same_circuit_cost(pos[p], pos[q], pos[r], pos[s])
 
     assert abs(tz.jw_cost(perm) - expected) < 1e-9
 

@@ -65,7 +65,7 @@ class ElectronicStructure(Hamiltonian):
 
     def __add__(self, other):
         if self._compatible(other):
-            return ElectronicStructure(
+            return type(self)(
                 self.h0 + other.h0,
                 self.h1e + other.h1e,
                 self.h2e + other.h2e,
@@ -78,7 +78,7 @@ class ElectronicStructure(Hamiltonian):
 
     def __sub__(self, other):
         if self._compatible(other):
-            return ElectronicStructure(
+            return type(self)(
                 self.h0 - other.h0,
                 self.h1e - other.h1e,
                 self.h2e - other.h2e,
@@ -91,7 +91,7 @@ class ElectronicStructure(Hamiltonian):
 
     def __mul__(self, other):
         if isinstance(other, (int, float)):
-            return ElectronicStructure(
+            return type(self)(
                 other * self.h0, other * self.h1e, other * self.h2e, self.num_elec
             )
         else:
@@ -131,26 +131,6 @@ class ElectronicStructure(Hamiltonian):
         adj = scipy.sparse.csr_matrix((conn > 0).astype(np.int8))
         _, labels = scipy.sparse.csgraph.connected_components(adj, directed=False)
         return labels
-
-    def plot_orbital_interaction_graph(self) -> None:
-        """Display the orbital interaction graph as a heatmap."""
-        import matplotlib.pyplot as plt
-
-        data = self.orbital_interaction_graph()
-        cmap = plt.colormaps["Blues"].copy()
-        cmap.set_under("lightgrey")
-
-        vmin = data[data > 0].min() if np.any(data > 0) else 1.0
-
-        fig, ax = plt.subplots()
-        im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=data.max())
-        fig.colorbar(
-            im, ax=ax, label=r"$|h_{pq}^{1e}| + \sum_{r}|h_{pqrr}^{2e}|$", extend="min"
-        )
-        ax.set_xlabel("MO index q")
-        ax.set_ylabel("MO index p")
-        ax.set_title("Orbital interaction graph")
-        plt.show()
 
     def symmetry_ordering(self) -> None:
         """Reorder MOs in-place by orb_symmetries index, grouping each symmetry block."""
@@ -345,7 +325,9 @@ class ElectronicStructure(Hamiltonian):
     def to_ElectronicStructureTZ(self):
         from champy.ElectronicStructureTZ import ElectronicStructureTZ
 
-        return ElectronicStructureTZ(h0=self.h0, h1e=self.h1e, h2e=self.h2e)
+        return ElectronicStructureTZ(
+            h0=self.h0, h1e=self.h1e, h2e=self.h2e, num_elec=self.num_elec
+        )
 
     def sum_pauli_coeffs(self) -> float:
         """

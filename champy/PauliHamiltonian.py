@@ -123,3 +123,35 @@ class PauliHamiltonian(Hamiltonian):
     def ground_state(self) -> np.ndarray:
         _, eigvec = scipy.sparse.linalg.eigsh(self.to_sparse_matrix(), k=1, which="SA")
         return eigvec[:, 0]
+
+
+def multiply_labels(l1: str, l2: str):
+    """Multiply two Pauli label strings, return (result_label, phase)."""
+    phase = 1.0
+    chars = []
+    for a, b in zip(l1, l2):
+        p, ph = _pauli_mult(a, b)
+        chars.append(p)
+        phase *= ph
+    return "".join(chars), phase
+
+
+_PAULI_MULT_TABLE = {
+    ("X", "Y"): ("Z", 1j),
+    ("Y", "X"): ("Z", -1j),
+    ("X", "Z"): ("Y", -1j),
+    ("Z", "X"): ("Y", 1j),
+    ("Y", "Z"): ("X", 1j),
+    ("Z", "Y"): ("X", -1j),
+}
+
+
+def _pauli_mult(a: str, b: str):
+    """Single-qubit Pauli multiplication, return (result, phase)."""
+    if a == "I":
+        return b, 1.0
+    if b == "I":
+        return a, 1.0
+    if a == b:
+        return "I", 1.0
+    return _PAULI_MULT_TABLE[(a, b)]
