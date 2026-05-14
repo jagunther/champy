@@ -192,62 +192,77 @@ class ElectronicStructureTZ(ElectronicStructure):
 
     # ── JW ordering ─────────────────────────────────────────────────────────
 
-    def _circuit_cost_tensors(self) -> dict:
-        """Lazily build and cache 2-qubit-gate cost tensors keyed by term
-        group. Each tensor is indexed by qubit positions: entry [i, j, ...]
-        is the cost when the term's orbital indices land at positions
-        (i, j, ...) in the JW string. Z and ZZ entries are perm-independent
-        scalars.
+    def _circuit_cost_tensors(
+        self, *, cost_zz: float = 1.0, cost_1q: float = 0.0
+    ) -> dict:
+        """Lazily build and cache per-term-group cost tensors. Each tensor is
+        indexed by qubit positions: entry [i, j, ...] is the cost when the
+        term's orbital indices land at positions (i, j, ...) in the JW string.
+        Z and ZZ entries are perm-independent scalars.
+
+        Cost weights are forwarded to the underlying ``circuits.*_circuit_cost``
+        functions. Results are cached per ``(cost_zz, cost_1q)`` pair on the
+        instance; the cache survives orbital permutation since cost tensors
+        depend only on ``num_orb``.
         """
-        if hasattr(self, "_cost_tensors"):
-            return self._cost_tensors
+        key = (cost_zz, cost_1q)
+        if not hasattr(self, "_cost_tensors_cache"):
+            self._cost_tensors_cache = {}
+        if key in self._cost_tensors_cache:
+            return self._cost_tensors_cache[key]
         n = self.num_orb
         cost_T = np.zeros((n, n))
         cost_TZ_opp = np.zeros((n, n))
         cost_TZ_same = np.zeros((n, n, n))
         cost_TT_opp = np.zeros((n, n, n, n))
         cost_TT_same = np.zeros((n, n, n, n))
+        kw = dict(cost_zz=cost_zz, cost_1q=cost_1q)
         for p in range(n):
             for q in range(n):
                 if p == q:
                     continue
-                cost_T[p, q] = circuits.t_circuit_cost(p, q)
-                cost_TZ_opp[p, q] = circuits.tz_opp_circuit_cost(p, q)
+                cost_T[p, q] = circuits.t_circuit_cost(p, q, **kw)
+                cost_TZ_opp[p, q] = circuits.tz_opp_circuit_cost(p, q, **kw)
                 for r in range(n):
                     if r != p and r != q:
                         cost_TZ_same[p, q, r] = circuits.tz_same_circuit_cost(
-                            p, q, r
+                            p, q, r, **kw
                         )
                     for s in range(n):
                         if s == r:
                             continue
                         cost_TT_opp[p, q, r, s] = circuits.tt_opp_circuit_cost(
-                            p, q, r, s
+                            p, q, r, s, **kw
                         )
                         if len({p, q, r, s}) == 4:
                             cost_TT_same[p, q, r, s] = (
-                                circuits.tt_same_circuit_cost(p, q, r, s)
+                                circuits.tt_same_circuit_cost(p, q, r, s, **kw)
                             )
-        self._cost_tensors = {
-            "Z": circuits.z_circuit_cost(),
-            "ZZ": circuits.zz_circuit_cost(),
+        tensors = {
+            "Z": circuits.z_circuit_cost(**kw),
+            "ZZ": circuits.zz_circuit_cost(**kw),
             "T": cost_T,
             "TZ_opp": cost_TZ_opp,
             "TZ_same": cost_TZ_same,
             "TT_opp": cost_TT_opp,
             "TT_same": cost_TT_same,
         }
-        return self._cost_tensors
+        self._cost_tensors_cache[key] = tensors
+        return tensors
 
-    def jw_cost(self, perm: np.ndarray) -> float:
-        """Total 2-qubit-gate cost Σ_α |c_α| · gates_α(perm) under spatial-
+    def jw_cost(
+        self, perm: np.ndarray, *, cost_zz: float = 1.0, cost_1q: float = 0.0
+    ) -> float:
+        """Total weighted gate cost Σ_α |c_α| · gates_α(perm) under spatial-
         orbital permutation `perm` (perm[i] = orbital placed at JW position
         i within each spin sector).
+
+        cost_zz and cost_1q select the gate-cost weights (see circuits.py).
         """
         n = self.num_orb
         pos = np.empty(n, dtype=int)
         pos[perm] = np.arange(n)
-        t = self._circuit_cost_tensors()
+        t = self._circuit_cost_tensors(cost_zz=cost_zz, cost_1q=cost_1q)
 
         T_p = t["T"][np.ix_(pos, pos)]
         TZopp_p = t["TZ_opp"][np.ix_(pos, pos)]
@@ -280,11 +295,16 @@ class ElectronicStructureTZ(ElectronicStructure):
         w += np.einsum("pqrs->rs", np.abs(self.coeff_TT_same))
         return w + w.T
 
-    def optimize_jw_ordering(self) -> np.ndarray:
+    def optimize_jw_ordering(
+        self, *, cost_zz: float = 1.0, cost_1q: float = 0.0
+    ) -> np.ndarray:
         """Find a low-cost Jordan-Wigner ordering via spectral seeding +
         adjacent-swap refinement against `jw_cost`. Returns a permutation
         array π of length num_orb where π[i] is the spatial orbital placed
-        at JW position i (within each spin sector)."""
+        at JW position i (within each spin sector).
+
+        cost_zz and cost_1q are forwarded to `jw_cost` during refinement.
+        """
         w = self._jw_pair_weights()
         n = self.num_orb
 
@@ -296,30 +316,36 @@ class ElectronicStructureTZ(ElectronicStructure):
         perm = np.argsort(fiedler)
 
         # ── 2. Adjacent-swap refinement against actual jw_cost ──────────────
+        kw = dict(cost_zz=cost_zz, cost_1q=cost_1q)
         improved = True
         while improved:
             improved = False
+            current = self.jw_cost(perm, **kw)
             for i in range(n - 1):
                 swapped = perm.copy()
                 swapped[i], swapped[i + 1] = swapped[i + 1], swapped[i]
-                if self.jw_cost(swapped) < self.jw_cost(perm):
+                trial = self.jw_cost(swapped, **kw)
+                if trial < current:
                     perm = swapped
+                    current = trial
                     improved = True
 
         return perm
 
     def apply_jw_ordering(
-        self, perm: np.ndarray = None, inplace: bool = False
+        self, perm: np.ndarray = None, inplace: bool = False,
+        *, cost_zz: float = 1.0, cost_1q: float = 0.0,
     ) -> "ElectronicStructureTZ | None":
         """Permute spatial orbital indices according to a JW ordering.
 
         :param perm: permutation array where perm[i] is the orbital placed at
-                     position i. If None, calls optimize_jw_ordering().
+                     position i. If None, calls optimize_jw_ordering() with
+                     the given cost weights.
         :param inplace: if True, rebuild this instance in-place and return None;
                         if False, return a new ElectronicStructureTZ.
         """
         if perm is None:
-            perm = self.optimize_jw_ordering()
+            perm = self.optimize_jw_ordering(cost_zz=cost_zz, cost_1q=cost_1q)
         ix = np.ix_(perm, perm)
         ix4 = np.ix_(perm, perm, perm, perm)
         h1e_p = self.h1e[ix]
