@@ -254,6 +254,7 @@ def test_optimize_1norm(hamil_random, optimize_orbitals, optimize_shift):
         optimize_orbitals=optimize_orbitals,
         optimize_shift=optimize_shift,
         seed=0,
+        num_initial_samples=5,
     )
 
     # ground state energy must be preserved

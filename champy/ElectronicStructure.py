@@ -410,6 +410,7 @@ class ElectronicStructure(Hamiltonian):
         inplace: bool = True,
         basinhopping: bool = False,
         basinhopping_kwargs: dict = None,
+        num_initial_samples: int = 1,
     ) -> scipy.optimize.OptimizeResult:
         """Minimize a cost function over orbital rotations and/or number-operator shifts.
 
@@ -437,6 +438,10 @@ class ElectronicStructure(Hamiltonian):
         basinhopping_kwargs : dict or None
             Extra keyword arguments forwarded to scipy.optimize.basinhopping
             (e.g. niter, T, stepsize). Ignored when basinhopping=False.
+        num_initial_samples : int
+            Number of random starting points to evaluate before the main
+            optimization. The point with the lowest objective value is used
+            as x0. Default 1 (single random draw, original behaviour).
 
         Returns
         -------
@@ -499,15 +504,15 @@ class ElectronicStructure(Hamiltonian):
                 shift2e = shift2e.at[np.ix_(idx, idx)].set(block)
             return shift2e
 
-        # initial parameter vector: all parameters start from a small random perturbation
         rng = np.random.default_rng(seed)
-        x0_parts = []
-        if optimize_orbitals:
-            x0_parts.append(rng.standard_normal(n_kappa) * perturbation)
-        if optimize_shift:
-            # shift1e (scalar μ₁) + shift2e (block-diagonal ξ entries)
-            x0_parts.append(rng.standard_normal(1 + n_shift2e) * perturbation)
-        x0 = np.concatenate(x0_parts)
+
+        def _sample_x0():
+            parts = []
+            if optimize_orbitals:
+                parts.append(rng.standard_normal(n_kappa) * perturbation)
+            if optimize_shift:
+                parts.append(rng.standard_normal(1 + n_shift2e) * perturbation)
+            return np.concatenate(parts)
 
         def _objective(x):
             pos = 0
@@ -541,6 +546,14 @@ class ElectronicStructure(Hamiltonian):
         def _scipy_objective(x):
             val, grad = _val_and_grad(jnp.array(x))
             return float(val), np.array(grad)
+
+        # pick best starting point among num_initial_samples random candidates
+        if num_initial_samples <= 1:
+            x0 = _sample_x0()
+        else:
+            candidates = [_sample_x0() for _ in range(num_initial_samples)]
+            vals = [float(_val_and_grad(jnp.array(c))[0]) for c in candidates]
+            x0 = candidates[int(np.argmin(vals))]
 
         minimizer_kwargs = {"method": method, "jac": True}
         if basinhopping:
@@ -586,6 +599,7 @@ class ElectronicStructure(Hamiltonian):
         inplace: bool = True,
         basinhopping: bool = False,
         basinhopping_kwargs: dict = None,
+        num_initial_samples: int = 1,
     ) -> scipy.optimize.OptimizeResult:
         """Minimize the Pauli 1-norm over orbital rotations and/or number-operator shifts.
 
@@ -617,4 +631,5 @@ class ElectronicStructure(Hamiltonian):
             inplace=inplace,
             basinhopping=basinhopping,
             basinhopping_kwargs=basinhopping_kwargs,
+            num_initial_samples=num_initial_samples,
         )
