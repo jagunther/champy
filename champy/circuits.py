@@ -262,6 +262,49 @@ def zzzz_circuit_cost(*, cost_zz: float = 1.0, cost_1q: float = 0.0) -> float:
 # tt_same_circuit_cost.
 
 
+# top-level circuit dispatcher for all TZ terms
+def tz_term_circuit(term, angle: float, n: int, offset: int) -> str:
+    """Emit the QASM body for exp(i · angle · O_α) for the given term.
+    Term is tuple as given by ElectronicStructureTZ.enumerate_terms()."""
+    kind, indices, x, _, _ = term
+    if kind == "Z":
+        (p,) = indices
+        return z_circuit(p + 1, x, angle, n, offset)
+    if kind == "T":
+        p, q = indices
+        return t_circuit(p + 1, q + 1, x, angle, n, offset)
+    if kind == "ZZ_same":
+        p, q = indices
+        return zz_circuit(p + 1, x, q + 1, x, angle, n, offset)
+    if kind == "ZZ_opp":
+        p, q = indices
+        return zz_circuit(p + 1, 0, q + 1, 1, angle, n, offset)
+    if kind == "TZ_opp":
+        p, q, r = indices
+        return tz_opp_circuit(p + 1, q + 1, x, r + 1, angle, n, offset)
+    if kind == "TZ_same":
+        p, q, r = indices
+        return tz_same_circuit(p + 1, q + 1, r + 1, x, angle, n, offset)
+    if kind == "TT_opp":
+        p, q, r, s = indices
+        return tt_opp_circuit(p + 1, q + 1, r + 1, s + 1, angle, n, offset)
+    if kind == "TT_same":
+        # mask_tt_same guarantees p < q, r < s, p < r, {p,q} ∩ {r,s} = ∅.
+        # With p < r, the three topologies reduce to: non-overlap (q < r),
+        # interleaved (r < q < s), nested (r < s < q).
+        p, q, r, s = indices
+        if q < r:
+            return tt_same_nonoverlap_circuit(
+                p + 1, q + 1, r + 1, s + 1, x, angle, n, offset
+            )
+        if q < s:
+            return tt_same_interleaved_circuit(
+                p + 1, q + 1, r + 1, s + 1, x, angle, n, offset
+            )
+        return tt_same_nested_circuit(p + 1, q + 1, r + 1, s + 1, x, angle, n, offset)
+    raise ValueError(f"Unknown TZ term kind '{kind}'")
+
+
 def t_circuit(p: int, q: int, x: int, angle: float, n: int, offset: int = 0) -> str:
     """QASM circuit for exp(i * angle * T_pqx), where T_pq = (XX+YY)/2.
 
