@@ -29,6 +29,9 @@ Orbitals are indexed (p, x) with p ∈ [0, n) the spatial-orbital index and
 x ∈ {0, 1} the spin sector; qubit_index packs them into a JW qubit number.
 """
 
+import functools
+
+import numpy as np
 
 QASM_GATE_DEFS = """\
 gate rzz(theta) q0, q1 {
@@ -1108,4 +1111,54 @@ def szz_opp_circuit_cost(
 # implemented. The corresponding coefficient tensors (coeff_SS_same, coeff_SS_opp)
 # already exist in ElectronicStructureSZ and contribute to its one_norm, but
 # Trotter-step QASM synthesis for S_pq · S_rs products is still missing.
+
+
+# ── TZ cost tensors ──────────────────────────────────────────────────────────
+
+
+@functools.lru_cache(maxsize=32)
+def circuit_cost_tensors_tz(
+    n: int, cost_zz: float = 1.0, cost_1q: float = 0.0
+) -> dict:
+    """Per-term-group cost tensors for an n-orbital TZ Hamiltonian under JW.
+
+    Each tensor is indexed by orbital positions in the JW string; entry
+    [i, j, ...] is the gate cost when the term's orbitals land at positions
+    (i, j, ...). Scalar entries (Z, ZZ) are position-independent.
+
+    Results are cached by (n, cost_zz, cost_1q). Returned arrays are shared
+    across calls — do not mutate them.
+    """
+    kw = dict(cost_zz=cost_zz, cost_1q=cost_1q)
+    cost_T = np.zeros((n, n))
+    cost_TZ_opp = np.zeros((n, n))
+    cost_TZ_same = np.zeros((n, n, n))
+    cost_TT_opp = np.zeros((n, n, n, n))
+    cost_TT_same = np.zeros((n, n, n, n))
+    for p in range(n):
+        for q in range(n):
+            if p == q:
+                continue
+            cost_T[p, q] = t_circuit_cost(p, q, **kw)
+            cost_TZ_opp[p, q] = tz_opp_circuit_cost(p, q, **kw)
+            for r in range(n):
+                if r != p and r != q:
+                    cost_TZ_same[p, q, r] = tz_same_circuit_cost(p, q, r, **kw)
+                for s in range(n):
+                    if s == r:
+                        continue
+                    cost_TT_opp[p, q, r, s] = tt_opp_circuit_cost(p, q, r, s, **kw)
+                    if len({p, q, r, s}) == 4:
+                        cost_TT_same[p, q, r, s] = tt_same_circuit_cost(
+                            p, q, r, s, **kw
+                        )
+    return {
+        "Z": z_circuit_cost(**kw),
+        "ZZ": zz_circuit_cost(**kw),
+        "T": cost_T,
+        "TZ_opp": cost_TZ_opp,
+        "TZ_same": cost_TZ_same,
+        "TT_opp": cost_TT_opp,
+        "TT_same": cost_TT_same,
+    }
 

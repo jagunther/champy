@@ -256,64 +256,6 @@ class ElectronicStructureTZ(ElectronicStructure):
 
     # ── JW ordering ─────────────────────────────────────────────────────────
 
-    def _circuit_cost_tensors(
-        self, *, cost_zz: float = 1.0, cost_1q: float = 0.0
-    ) -> dict:
-        """Lazily build and cache per-term-group cost tensors. Each tensor is
-        indexed by qubit positions: entry [i, j, ...] is the cost when the
-        term's orbital indices land at positions (i, j, ...) in the JW string.
-        Z and ZZ entries are perm-independent scalars.
-
-        Cost weights are forwarded to the underlying ``circuits.*_circuit_cost``
-        functions. Results are cached per ``(cost_zz, cost_1q)`` pair on the
-        instance; the cache survives orbital permutation since cost tensors
-        depend only on ``num_orb``.
-        """
-        key = (cost_zz, cost_1q)
-        if not hasattr(self, "_cost_tensors_cache"):
-            self._cost_tensors_cache = {}
-        if key in self._cost_tensors_cache:
-            return self._cost_tensors_cache[key]
-        n = self.num_orb
-        cost_T = np.zeros((n, n))
-        cost_TZ_opp = np.zeros((n, n))
-        cost_TZ_same = np.zeros((n, n, n))
-        cost_TT_opp = np.zeros((n, n, n, n))
-        cost_TT_same = np.zeros((n, n, n, n))
-        kw = dict(cost_zz=cost_zz, cost_1q=cost_1q)
-        for p in range(n):
-            for q in range(n):
-                if p == q:
-                    continue
-                cost_T[p, q] = circuits.t_circuit_cost(p, q, **kw)
-                cost_TZ_opp[p, q] = circuits.tz_opp_circuit_cost(p, q, **kw)
-                for r in range(n):
-                    if r != p and r != q:
-                        cost_TZ_same[p, q, r] = circuits.tz_same_circuit_cost(
-                            p, q, r, **kw
-                        )
-                    for s in range(n):
-                        if s == r:
-                            continue
-                        cost_TT_opp[p, q, r, s] = circuits.tt_opp_circuit_cost(
-                            p, q, r, s, **kw
-                        )
-                        if len({p, q, r, s}) == 4:
-                            cost_TT_same[p, q, r, s] = circuits.tt_same_circuit_cost(
-                                p, q, r, s, **kw
-                            )
-        tensors = {
-            "Z": circuits.z_circuit_cost(**kw),
-            "ZZ": circuits.zz_circuit_cost(**kw),
-            "T": cost_T,
-            "TZ_opp": cost_TZ_opp,
-            "TZ_same": cost_TZ_same,
-            "TT_opp": cost_TT_opp,
-            "TT_same": cost_TT_same,
-        }
-        self._cost_tensors_cache[key] = tensors
-        return tensors
-
     def jw_cost(
         self, perm: np.ndarray, *, cost_zz: float = 1.0, cost_1q: float = 0.0
     ) -> float:
@@ -326,7 +268,7 @@ class ElectronicStructureTZ(ElectronicStructure):
         n = self.num_orb
         pos = np.empty(n, dtype=int)
         pos[perm] = np.arange(n)
-        t = self._circuit_cost_tensors(cost_zz=cost_zz, cost_1q=cost_1q)
+        t = circuits.circuit_cost_tensors_tz(n, cost_zz, cost_1q)
 
         T_p = t["T"][np.ix_(pos, pos)]
         TZopp_p = t["TZ_opp"][np.ix_(pos, pos)]
