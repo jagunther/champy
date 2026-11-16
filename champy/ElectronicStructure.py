@@ -152,32 +152,53 @@ class ElectronicStructure(Hamiltonian):
             self.h1e, self.h2e, self.num_orb, self.num_elec, np=self.dimension
         )[1]
 
-    def ground_state_energy(self) -> float:
+    def _fci_solve(
+        self,
+        sign: int = 1,
+        nroots: int = 1,
+        max_cycle: int = 1000,
+        conv_tol: float = 1e-10,
+        max_space: int | None = None,
+    ):
+        """
+        Lowest eigenpair of sign * H_el (without constant) in the (num_elec, Sz=0) sector.
+        Raises RuntimeError if the lowest root did not converge.
+
+        :return: (energy, fcivec) of the lowest root
+        """
         # The spin1 method works generally, see github.com/pyscf/pyscf/blob/master/examples/fci/01-given_h1e_h2e.py
         cisolver = fci.direct_spin1.FCI()
-        cisolver.max_cycle = 100
-        cisolver.conv_tol = 1e-10
-        e, _ = cisolver.kernel(self.h1e, self.h2e, self.num_orb, self.num_elec)
+        cisolver.max_cycle = max_cycle
+        cisolver.conv_tol = conv_tol
+        cisolver.nroots = nroots
+        if max_space is not None:
+            cisolver.max_space = max_space
+        e, c = cisolver.kernel(
+            sign * self.h1e, sign * self.h2e, self.num_orb, self.num_elec
+        )
+        if not np.atleast_1d(cisolver.converged)[0]:
+            raise RuntimeError(
+                f"FCI Davidson solver did not converge within {max_cycle} cycles "
+                f"(conv_tol={conv_tol}); the result would be unreliable."
+            )
+        if nroots > 1:
+            e, c = e[0], c[0]
+        return e, c
+
+    def ground_state_energy(self, max_cycle: int = 1000, conv_tol: float = 1e-10) -> float:
+        e, _ = self._fci_solve(1, max_cycle=max_cycle, conv_tol=conv_tol)
         return e + self.constant
 
-    def max_energy(self) -> float:
-        cisolver = fci.direct_spin1.FCI()
-        cisolver.max_cycle = 100
-        cisolver.conv_tol = 1e-10
-        e, _ = cisolver.kernel(-self.h1e, -self.h2e, self.num_orb, self.num_elec)
-        return e - self.constant
+    def max_energy(self, max_cycle: int = 1000, conv_tol: float = 1e-10) -> float:
+        # lowest eigenvalue e of -H_el gives max(H) = -e + constant
+        e, _ = self._fci_solve(-1, max_cycle=max_cycle, conv_tol=conv_tol)
+        return -e + self.constant
 
-    def ground_state(self) -> np.ndarray:
-        _, fcivec = fci.direct_spin1.kernel(
-            self.h1e,
-            self.h2e,
-            self.num_orb,
-            self.num_elec,
-            nroots=3,
-            max_space=50,
-            max_cycle=200,
+    def ground_state(self, max_cycle: int = 1000, conv_tol: float = 1e-10) -> np.ndarray:
+        _, c = self._fci_solve(
+            1, nroots=3, max_cycle=max_cycle, conv_tol=conv_tol, max_space=50
         )
-        return fcivec[0].flatten()
+        return c.flatten()
 
     def onv_basis(self) -> np.ndarray:
         """

@@ -83,7 +83,7 @@ def test_mul(hamil_random, scalar):
         assert abs(hamil.ground_state_energy() - e * scalar) < 1e-10
     else:
         hamil = scalar * hamil
-        assert abs(hamil.max_energy() + e * scalar) < 1e-10
+        assert abs(hamil.max_energy() - e * scalar) < 1e-10
 
 
 @pytest.mark.parametrize("integrals_h2o", [4], indirect=True)
@@ -240,6 +240,7 @@ def test_shift_number_op_inplace(hamil_random):
         ((4, 4), False, True),
         ((4, 4), True, True),
         ((6, 4), True, True),
+        ((8, 8), True, True),
     ],
     indirect=["hamil_random"],
 )
