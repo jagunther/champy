@@ -626,12 +626,14 @@ class ElectronicStructure(Hamiltonian):
 
         M is precomputed once from jw_matrix() for the current orbital ordering and
         closed over in the objective. This makes the objective JAX-differentiable via
-        _majorana_coeffs().
+        _majorana_coeffs(). M is kept sparse (BCOO): it is extremely sparse and a dense
+        copy grows as ~num_orb^8.
         """
         import jax.numpy as jnp
+        from jax.experimental import sparse as jsparse
 
         _, _, M_sparse = self.to_MajoranaPair().jw_matrix()
-        M = jnp.array(M_sparse.toarray().real)
+        M = jsparse.BCOO.from_scipy_sparse(M_sparse.real.tocsr())
 
         def _1norm(h1e, h2e):
             _, f1e, f2e_ss, f2e_ds, f2e_so = MajoranaPair._majorana_coeffs(
