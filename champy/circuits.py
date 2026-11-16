@@ -29,6 +29,9 @@ Orbitals are indexed (p, x) with p ∈ [0, n) the spatial-orbital index and
 x ∈ {0, 1} the spin sector; qubit_index packs them into a JW qubit number.
 """
 
+import functools
+
+import numpy as np
 
 QASM_GATE_DEFS = """\
 gate rzz(theta) q0, q1 {
@@ -259,6 +262,49 @@ def zzzz_circuit_cost(*, cost_zz: float = 1.0, cost_1q: float = 0.0) -> float:
 # tt_same_circuit_cost.
 
 
+# top-level circuit dispatcher for all TZ terms
+def tz_term_circuit(term, angle: float, n: int, offset: int) -> str:
+    """Emit the QASM body for exp(i · angle · O_α) for the given term.
+    Term is tuple as given by ElectronicStructureTZ.enumerate_terms()."""
+    kind, indices, x, _, _ = term
+    if kind == "Z":
+        (p,) = indices
+        return z_circuit(p + 1, x, angle, n, offset)
+    if kind == "T":
+        p, q = indices
+        return t_circuit(p + 1, q + 1, x, angle, n, offset)
+    if kind == "ZZ_same":
+        p, q = indices
+        return zz_circuit(p + 1, x, q + 1, x, angle, n, offset)
+    if kind == "ZZ_opp":
+        p, q = indices
+        return zz_circuit(p + 1, 0, q + 1, 1, angle, n, offset)
+    if kind == "TZ_opp":
+        p, q, r = indices
+        return tz_opp_circuit(p + 1, q + 1, x, r + 1, angle, n, offset)
+    if kind == "TZ_same":
+        p, q, r = indices
+        return tz_same_circuit(p + 1, q + 1, r + 1, x, angle, n, offset)
+    if kind == "TT_opp":
+        p, q, r, s = indices
+        return tt_opp_circuit(p + 1, q + 1, r + 1, s + 1, angle, n, offset)
+    if kind == "TT_same":
+        # mask_tt_same guarantees p < q, r < s, p < r, {p,q} ∩ {r,s} = ∅.
+        # With p < r, the three topologies reduce to: non-overlap (q < r),
+        # interleaved (r < q < s), nested (r < s < q).
+        p, q, r, s = indices
+        if q < r:
+            return tt_same_nonoverlap_circuit(
+                p + 1, q + 1, r + 1, s + 1, x, angle, n, offset
+            )
+        if q < s:
+            return tt_same_interleaved_circuit(
+                p + 1, q + 1, r + 1, s + 1, x, angle, n, offset
+            )
+        return tt_same_nested_circuit(p + 1, q + 1, r + 1, s + 1, x, angle, n, offset)
+    raise ValueError(f"Unknown TZ term kind '{kind}'")
+
+
 def t_circuit(p: int, q: int, x: int, angle: float, n: int, offset: int = 0) -> str:
     """QASM circuit for exp(i * angle * T_pqx), where T_pq = (XX+YY)/2.
 
@@ -484,8 +530,13 @@ def tzz_same_circuit(
 
 
 def tzz_same_circuit_cost(
-    p: int, q: int, r: int, s_orb: int,
-    *, cost_zz: float = 1.0, cost_1q: float = 0.0,
+    p: int,
+    q: int,
+    r: int,
+    s_orb: int,
+    *,
+    cost_zz: float = 1.0,
+    cost_1q: float = 0.0,
 ) -> float:
     """Weighted cost for tzz_same_circuit. Eff size = d+1 - 2·(# of {r,s} inside (p,q)).
 
@@ -601,8 +652,13 @@ def tt_opp_circuit(
 
 
 def tt_opp_circuit_cost(
-    p: int, q: int, r: int, s: int,
-    *, cost_zz: float = 1.0, cost_1q: float = 0.0,
+    p: int,
+    q: int,
+    r: int,
+    s: int,
+    *,
+    cost_zz: float = 1.0,
+    cost_1q: float = 0.0,
 ) -> float:
     """Weighted cost for tt_opp_circuit. 16 cost_1q always (4 xxyy macros total).
 
@@ -824,8 +880,13 @@ def tt_same_nested_circuit(
 
 
 def tt_same_circuit_cost(
-    p: int, q: int, r: int, s: int,
-    *, cost_zz: float = 1.0, cost_1q: float = 0.0,
+    p: int,
+    q: int,
+    r: int,
+    s: int,
+    *,
+    cost_zz: float = 1.0,
+    cost_1q: float = 0.0,
 ) -> float:
     """Weighted cost for same-spin TT (nonoverlap, interleaved, or nested).
 
@@ -876,9 +937,7 @@ def tt_same_circuit_cost(
 #                            · exp(iθ/2 · Z_p Z_q Z_r Z_s)
 
 
-def s_circuit(
-    p: int, q: int, x: int, angle: float, n: int, offset: int = 0
-) -> str:
+def s_circuit(p: int, q: int, x: int, angle: float, n: int, offset: int = 0) -> str:
     """QASM for exp(i*angle * S_pqx). Cost: t_circuit_cost(p,q) + 1."""
     s = ""
     s += t_circuit(p, q, x, angle, n, offset)
@@ -1050,8 +1109,13 @@ def szz_same_circuit(
 
 
 def szz_same_circuit_cost(
-    p: int, q: int, r: int, s_orb: int,
-    *, cost_zz: float = 1.0, cost_1q: float = 0.0,
+    p: int,
+    q: int,
+    r: int,
+    s_orb: int,
+    *,
+    cost_zz: float = 1.0,
+    cost_1q: float = 0.0,
 ) -> float:
     """Weighted cost for szz_same_circuit, dispatched by case.
 
@@ -1109,3 +1173,80 @@ def szz_opp_circuit_cost(
 # already exist in ElectronicStructureSZ and contribute to its one_norm, but
 # Trotter-step QASM synthesis for S_pq · S_rs products is still missing.
 
+
+# ── TZ cost tensors ──────────────────────────────────────────────────────────
+
+
+@functools.lru_cache(maxsize=32)
+def circuit_cost_tensors_tz(n: int, cost_zz: float = 1.0, cost_1q: float = 0.0) -> dict:
+    """Per-term-group cost tensors for an n-orbital TZ Hamiltonian under JW.
+
+    Each tensor is indexed by orbital positions in the JW string; entry
+    [i, j, ...] is the gate cost when the term's orbitals land at positions
+    (i, j, ...). Scalar entries (Z, ZZ) are position-independent.
+
+    Results are cached by (n, cost_zz, cost_1q). Returned arrays are shared
+    across calls — do not mutate them.
+    """
+    kw = dict(cost_zz=cost_zz, cost_1q=cost_1q)
+    cost_T = np.zeros((n, n))
+    cost_TZ_opp = np.zeros((n, n))
+    cost_TZ_same = np.zeros((n, n, n))
+    cost_TT_opp = np.zeros((n, n, n, n))
+    cost_TT_same = np.zeros((n, n, n, n))
+    for p in range(n):
+        for q in range(n):
+            if p == q:
+                continue
+            cost_T[p, q] = t_circuit_cost(p, q, **kw)
+            cost_TZ_opp[p, q] = tz_opp_circuit_cost(p, q, **kw)
+            for r in range(n):
+                if r != p and r != q:
+                    cost_TZ_same[p, q, r] = tz_same_circuit_cost(p, q, r, **kw)
+                for s in range(n):
+                    if s == r:
+                        continue
+                    cost_TT_opp[p, q, r, s] = tt_opp_circuit_cost(p, q, r, s, **kw)
+                    if len({p, q, r, s}) == 4:
+                        cost_TT_same[p, q, r, s] = tt_same_circuit_cost(
+                            p, q, r, s, **kw
+                        )
+    return {
+        "Z": z_circuit_cost(**kw),
+        "ZZ": zz_circuit_cost(**kw),
+        "T": cost_T,
+        "TZ_opp": cost_TZ_opp,
+        "TZ_same": cost_TZ_same,
+        "TT_opp": cost_TT_opp,
+        "TT_same": cost_TT_same,
+    }
+
+
+def term_costs_tz(n: int, cost_zz: float, cost_1q: float, terms: list) -> np.ndarray:
+    """Gate cost for TZ terms; as given by ElectronicStructureTZ.enumerate_terms().
+    Looked up from circuit_cost_tensors_tz output."""
+    costs = []
+    ct = circuit_cost_tensors_tz(n=n, cost_1q=cost_1q, cost_zz=cost_zz)
+    for kind, indices, _spin, _, _ in terms:
+        if kind == "Z":
+            costs.append(float(ct["Z"]))
+        elif kind in ("ZZ_same", "ZZ_opp"):
+            costs.append(float(ct["ZZ"]))
+        elif kind == "T":
+            p, q = indices
+            costs.append(float(ct["T"][p, q]))
+        elif kind == "TZ_opp":
+            p, q, _r = indices
+            costs.append(float(ct["TZ_opp"][p, q]))
+        elif kind == "TZ_same":
+            p, q, r = indices
+            costs.append(float(ct["TZ_same"][p, q, r]))
+        elif kind == "TT_opp":
+            p, q, r, s = indices
+            costs.append(float(ct["TT_opp"][p, q, r, s]))
+        elif kind == "TT_same":
+            p, q, r, s = indices
+            costs.append(float(ct["TT_same"][p, q, r, s]))
+        else:
+            raise ValueError(f"Unknown TZ term kind '{kind}'")
+    return np.array(costs)

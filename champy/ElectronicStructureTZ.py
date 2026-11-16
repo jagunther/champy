@@ -190,65 +190,71 @@ class ElectronicStructureTZ(ElectronicStructure):
             + xp.sum(xp.abs(c["TT_opp"]))
         )
 
-    # ── JW ordering ─────────────────────────────────────────────────────────
+    def enumerate_terms(self) -> list:
+        """Flat list of TZ terms with spin already expanded.
 
-    def _circuit_cost_tensors(
-        self, *, cost_zz: float = 1.0, cost_1q: float = 0.0
-    ) -> dict:
-        """Lazily build and cache per-term-group cost tensors. Each tensor is
-        indexed by qubit positions: entry [i, j, ...] is the cost when the
-        term's orbital indices land at positions (i, j, ...) in the JW string.
-        Z and ZZ entries are perm-independent scalars.
+        Each entry is a tuple ``(kind, indices, spin, abs_coeff, sign)``:
+          - kind     : str, one of {"Z", "T", "ZZ_same", "ZZ_opp", "TZ_opp",
+                       "TZ_same", "TT_opp", "TT_same"}.
+          - indices  : tuple of orbital indices (0-based) defining the term.
+          - spin     : 0 (alpha) or 1 (beta) for spin-doubled terms; None for
+                       ZZ_opp and TT_opp (whose spin assignment is fixed).
+          - abs_coeff: |c_α| for this physical term.
+          - sign     : ±1.
 
-        Cost weights are forwarded to the underlying ``circuits.*_circuit_cost``
-        functions. Results are cached per ``(cost_zz, cost_1q)`` pair on the
-        instance; the cache survives orbital permutation since cost tensors
-        depend only on ``num_orb``.
+        Spin doubling matches the multiplicities baked into ``one_norm`` and
+        ``jw_cost``.
         """
-        key = (cost_zz, cost_1q)
-        if not hasattr(self, "_cost_tensors_cache"):
-            self._cost_tensors_cache = {}
-        if key in self._cost_tensors_cache:
-            return self._cost_tensors_cache[key]
-        n = self.num_orb
-        cost_T = np.zeros((n, n))
-        cost_TZ_opp = np.zeros((n, n))
-        cost_TZ_same = np.zeros((n, n, n))
-        cost_TT_opp = np.zeros((n, n, n, n))
-        cost_TT_same = np.zeros((n, n, n, n))
-        kw = dict(cost_zz=cost_zz, cost_1q=cost_1q)
-        for p in range(n):
-            for q in range(n):
-                if p == q:
-                    continue
-                cost_T[p, q] = circuits.t_circuit_cost(p, q, **kw)
-                cost_TZ_opp[p, q] = circuits.tz_opp_circuit_cost(p, q, **kw)
-                for r in range(n):
-                    if r != p and r != q:
-                        cost_TZ_same[p, q, r] = circuits.tz_same_circuit_cost(
-                            p, q, r, **kw
-                        )
-                    for s in range(n):
-                        if s == r:
-                            continue
-                        cost_TT_opp[p, q, r, s] = circuits.tt_opp_circuit_cost(
-                            p, q, r, s, **kw
-                        )
-                        if len({p, q, r, s}) == 4:
-                            cost_TT_same[p, q, r, s] = (
-                                circuits.tt_same_circuit_cost(p, q, r, s, **kw)
-                            )
-        tensors = {
-            "Z": circuits.z_circuit_cost(**kw),
-            "ZZ": circuits.zz_circuit_cost(**kw),
-            "T": cost_T,
-            "TZ_opp": cost_TZ_opp,
-            "TZ_same": cost_TZ_same,
-            "TT_opp": cost_TT_opp,
-            "TT_same": cost_TT_same,
-        }
-        self._cost_tensors_cache[key] = tensors
-        return tensors
+        out = []
+
+        # both spin
+        def _both(kind, indices, c):
+            ac, sg = abs(c), (1 if c > 0 else -1)
+            out.append((kind, indices, 0, ac, sg))
+            out.append((kind, indices, 1, ac, sg))
+
+        # single spin
+        def _once(kind, indices, c):
+            out.append((kind, indices, None, abs(c), 1 if c > 0 else -1))
+
+        for p in np.nonzero(self.coeff_Z)[0]:
+            _both("Z", (int(p),), float(self.coeff_Z[p]))
+
+        for p, q in zip(*np.nonzero(self.coeff_T)):
+            _both("T", (int(p), int(q)), float(self.coeff_T[p, q]))
+
+        for p, q in zip(*np.nonzero(self.coeff_ZZ_same)):
+            _both("ZZ_same", (int(p), int(q)), float(self.coeff_ZZ_same[p, q]))
+
+        for p, q in zip(*np.nonzero(self.coeff_ZZ_opp)):
+            _once("ZZ_opp", (int(p), int(q)), float(self.coeff_ZZ_opp[p, q]))
+
+        # TZ_opp[p<q, r]: spin is the spin sector of T; Z lives in 1-spin.
+        for p, q, r in zip(*np.nonzero(self.coeff_TZ_opp)):
+            _both("TZ_opp", (int(p), int(q), int(r)), float(self.coeff_TZ_opp[p, q, r]))
+
+        for p, q, r in zip(*np.nonzero(self.coeff_TZ_same)):
+            _both(
+                "TZ_same", (int(p), int(q), int(r)), float(self.coeff_TZ_same[p, q, r])
+            )
+
+        for p, q, r, s in zip(*np.nonzero(self.coeff_TT_opp)):
+            _once(
+                "TT_opp",
+                (int(p), int(q), int(r), int(s)),
+                float(self.coeff_TT_opp[p, q, r, s]),
+            )
+
+        for p, q, r, s in zip(*np.nonzero(self.coeff_TT_same)):
+            _both(
+                "TT_same",
+                (int(p), int(q), int(r), int(s)),
+                float(self.coeff_TT_same[p, q, r, s]),
+            )
+
+        return out
+
+    # ── JW ordering ─────────────────────────────────────────────────────────
 
     def jw_cost(
         self, perm: np.ndarray, *, cost_zz: float = 1.0, cost_1q: float = 0.0
@@ -262,7 +268,7 @@ class ElectronicStructureTZ(ElectronicStructure):
         n = self.num_orb
         pos = np.empty(n, dtype=int)
         pos[perm] = np.arange(n)
-        t = self._circuit_cost_tensors(cost_zz=cost_zz, cost_1q=cost_1q)
+        t = circuits.circuit_cost_tensors_tz(n, cost_zz, cost_1q)
 
         T_p = t["T"][np.ix_(pos, pos)]
         TZopp_p = t["TZ_opp"][np.ix_(pos, pos)]
@@ -333,8 +339,12 @@ class ElectronicStructureTZ(ElectronicStructure):
         return perm
 
     def apply_jw_ordering(
-        self, perm: np.ndarray = None, inplace: bool = False,
-        *, cost_zz: float = 1.0, cost_1q: float = 0.0,
+        self,
+        perm: np.ndarray = None,
+        inplace: bool = False,
+        *,
+        cost_zz: float = 1.0,
+        cost_1q: float = 0.0,
     ) -> "ElectronicStructureTZ | None":
         """Permute spatial orbital indices according to a JW ordering.
 
@@ -351,9 +361,7 @@ class ElectronicStructureTZ(ElectronicStructure):
         h1e_p = self.h1e[ix]
         h2e_p = self.h2e[ix4]
         if inplace:
-            self.__init__(
-                h0=self.h0, h1e=h1e_p, h2e=h2e_p, num_elec=self.num_elec
-            )
+            self.__init__(h0=self.h0, h1e=h1e_p, h2e=h2e_p, num_elec=self.num_elec)
             return None
         return ElectronicStructureTZ(
             h0=self.h0, h1e=h1e_p, h2e=h2e_p, num_elec=self.num_elec
